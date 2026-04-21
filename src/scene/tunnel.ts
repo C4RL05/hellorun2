@@ -1,18 +1,31 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import {
   CELL,
   COLOR_EDGE,
   COLOR_FACE,
+  CUBE_JITTER_DEG,
+  EDGE_WIDTH_PX,
   TUNNEL_DEPTH,
   TUNNEL_HEIGHT,
   TUNNEL_WIDTH,
 } from "../constants";
 
+export interface TunnelScene {
+  object: THREE.Object3D;
+  // LineMaterial needs viewport size for its screen-space width calc.
+  // Caller must keep this in sync with the renderer on resize.
+  edgeMaterial: LineMaterial;
+}
+
 // Builds a straight section of corridor: a 3D grid of cubes with a 1-cell
 // hollow column running along -Z through the center. Geometry is merged into
-// one fill mesh + one edge LineSegments so the whole section is 2 draw calls.
-export function createTunnel(): THREE.Group {
+// one fill mesh + one fat-line segments mesh so the whole section is a
+// bounded number of draw calls.
+export function createTunnel(): TunnelScene {
   const cellCenters = computeCellCenters();
 
   const baseBox = new THREE.BoxGeometry(CELL, CELL, CELL);
@@ -22,8 +35,18 @@ export function createTunnel(): THREE.Group {
   const edges: THREE.BufferGeometry[] = [];
 
   const matrix = new THREE.Matrix4();
+  const quat = new THREE.Quaternion();
+  const euler = new THREE.Euler();
+  const scale = new THREE.Vector3(1, 1, 1);
+  const jitter = THREE.MathUtils.degToRad(CUBE_JITTER_DEG);
   for (const p of cellCenters) {
-    matrix.makeTranslation(p.x, p.y, p.z);
+    euler.set(
+      (Math.random() * 2 - 1) * jitter,
+      (Math.random() * 2 - 1) * jitter,
+      (Math.random() * 2 - 1) * jitter,
+    );
+    quat.setFromEuler(euler);
+    matrix.compose(p, quat, scale);
     boxes.push(baseBox.clone().applyMatrix4(matrix));
     edges.push(baseEdges.clone().applyMatrix4(matrix));
   }
@@ -32,21 +55,30 @@ export function createTunnel(): THREE.Group {
   baseEdges.dispose();
 
   const mergedFill = mergeGeometries(boxes, false);
-  const mergedEdge = mergeGeometries(edges, false);
-  if (!mergedFill || !mergedEdge) {
+  const mergedEdgeSegments = mergeGeometries(edges, false);
+  if (!mergedFill || !mergedEdgeSegments) {
     throw new Error("Failed to merge tunnel geometry");
   }
 
   for (const g of boxes) g.dispose();
   for (const g of edges) g.dispose();
 
+  const edgeGeometry = new LineSegmentsGeometry();
+  edgeGeometry.setPositions(
+    mergedEdgeSegments.attributes.position.array as Float32Array,
+  );
+  mergedEdgeSegments.dispose();
+
   const fillMaterial = new THREE.MeshLambertMaterial({ color: COLOR_FACE });
-  const edgeMaterial = new THREE.LineBasicMaterial({ color: COLOR_EDGE });
+  const edgeMaterial = new LineMaterial({
+    color: COLOR_EDGE,
+    linewidth: EDGE_WIDTH_PX,
+  });
 
   const group = new THREE.Group();
   group.add(new THREE.Mesh(mergedFill, fillMaterial));
-  group.add(new THREE.LineSegments(mergedEdge, edgeMaterial));
-  return group;
+  group.add(new LineSegments2(edgeGeometry, edgeMaterial));
+  return { object: group, edgeMaterial };
 }
 
 function computeCellCenters(): THREE.Vector3[] {

@@ -34,12 +34,15 @@ key.position.set(1, 2, 1);
 scene.add(key);
 scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
-scene.add(createTunnel());
+const tunnel = createTunnel();
+scene.add(tunnel.object);
+tunnel.edgeMaterial.resolution.set(window.innerWidth, window.innerHeight);
 
 addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  tunnel.edgeMaterial.resolution.set(window.innerWidth, window.innerHeight);
 });
 
 renderer.setAnimationLoop(() => {

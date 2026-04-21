@@ -29,6 +29,15 @@ export const COLOR_BACKGROUND = 0x000000;
 export const COLOR_FACE = 0x0a1420;
 export const COLOR_EDGE = 0x00aaff;
 
+// Per-cube random rotation range, applied independently on X/Y/Z. Gives the
+// tunnel a subtle hand-built jitter instead of a perfectly regular grid.
+export const CUBE_JITTER_DEG = 10;
+
+// Edge line thickness in CSS pixels (LineSegments2/LineMaterial). The plain
+// LineBasicMaterial linewidth is capped at 1px in every browser, so we use
+// screen-space triangle-strip lines instead.
+export const EDGE_WIDTH_PX = 2;
+
 if (TUNNEL_WIDTH % 2 === 0 || TUNNEL_HEIGHT % 2 === 0) {
   throw new Error(
     "TUNNEL_WIDTH and TUNNEL_HEIGHT must be odd so the hollow line has a true center column.",
