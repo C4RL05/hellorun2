@@ -41,9 +41,15 @@ export class PlayerController {
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
-    canvas.addEventListener("click", this.onCanvasClick);
     document.addEventListener("pointerlockchange", this.onPointerLockChange);
     document.addEventListener("mousemove", this.onMouseMove);
+  }
+
+  // Call from the canvas click handler when you want mouse capture. Kept
+  // explicit so the caller can decide whether this click should respawn,
+  // lock, or do neither (e.g., UI overlays).
+  requestPointerLockIfNeeded(): void {
+    if (!this.pointerLocked) this.canvas.requestPointerLock();
   }
 
   // Returns the world-space Y for this frame.
@@ -65,10 +71,15 @@ export class PlayerController {
     return center + this.inputNow * halfRange;
   }
 
+  // Snaps the player back to the spawn state (centered, no pending motion).
+  reset(): void {
+    this.inputTarget = 0;
+    this.inputNow = 0;
+  }
+
   dispose(): void {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
-    this.canvas.removeEventListener("click", this.onCanvasClick);
     document.removeEventListener("pointerlockchange", this.onPointerLockChange);
     document.removeEventListener("mousemove", this.onMouseMove);
   }
@@ -81,10 +92,6 @@ export class PlayerController {
   private onKeyUp = (e: KeyboardEvent) => {
     if (e.code === "ArrowUp" || e.code === "KeyW") this.holdingUp = false;
     else if (e.code === "ArrowDown" || e.code === "KeyS") this.holdingDown = false;
-  };
-
-  private onCanvasClick = () => {
-    if (!this.pointerLocked) this.canvas.requestPointerLock();
   };
 
   private onPointerLockChange = () => {
