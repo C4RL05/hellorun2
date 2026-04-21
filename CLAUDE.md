@@ -4,7 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository status
 
-Pre-implementation. The repo currently contains only `docs/hellorun2-plan.md` — the full design brief for HelloRun 2, a first-person rhythm runner where a song is the level. No `package.json`, no source, no build system exists yet. Read the plan before proposing any code.
+Early-stage. Milestone 1 (static cube-tunnel whitebox) is in. `docs/hellorun2-plan.md` is the authoritative design brief — read it before proposing anything that touches gameplay, audio, or visuals. Stack is Vite + TypeScript + three.js.
+
+## Commands
+
+- `npm run dev` — start Vite dev server (http://localhost:5173)
+- `npm run typecheck` — `tsc --noEmit`
+- `npm run build` — typecheck then Vite production build
+- `npm run preview` — serve the production build locally
+- `npm run visual-check` — headless Chromium loads the dev server, dumps pixel stats + any page/console errors, saves a screenshot to `tools/screenshots/tunnel.png`. Requires `npm run dev` running. Useful when you can't open a browser yourself.
+
+## Visual verification gotcha
+
+`npm run visual-check` **must** use the full Chrome-for-Testing binary, not `chrome-headless-shell`. The headless-shell's WebGL pipeline silently fails to link three.js material shaders (`VALIDATE_STATUS false` with empty info log, all draw calls refused). The launcher in `tools/visual-check.mjs` pins `channel: "chromium"` for this reason — don't remove it.
+
+Because the three.js renderer doesn't use `preserveDrawingBuffer`, trust `page.screenshot` (captured via the compositor) + pixel stats, not `canvas.toDataURL` inside a `page.evaluate`.
+
+## Layout
+
+- `src/main.ts` — renderer, scene, camera, animation loop
+- `src/constants.ts` — **feel-spec module** (plan §8). All tunable numbers live here — forward speed, vertical response, gate spacing, FOV, colors, tunnel dimensions. When adding a new tunable, extend this file rather than inlining the value at the call site.
+- `src/scene/` — scene-construction code (one file per kit piece / scene element). Static corridor geometry builders live here.
+- Axis convention: **-Z = forward, +X = right, +Y = up** (three.js default).
 
 ## What this game is (one-paragraph orientation)
 
