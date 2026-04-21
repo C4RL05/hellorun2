@@ -19,6 +19,11 @@ export interface TunnelScene {
   // LineMaterial needs viewport size for its screen-space width calc.
   // Caller must keep this in sync with the renderer on resize.
   edgeMaterial: LineMaterial;
+  // Per-cube local transforms (translation + jitter rotation). A debug
+  // visualization that wants oriented bboxes matching the rendered cubes
+  // uses these directly; one per cube that actually exists (hollow cell
+  // omitted).
+  cubeTransforms: readonly THREE.Matrix4[];
 }
 
 // Builds a straight section of corridor: a 3D grid of cubes with a 1-cell
@@ -34,6 +39,7 @@ export function createTunnel(): TunnelScene {
   const boxes: THREE.BufferGeometry[] = [];
   const edges: THREE.BufferGeometry[] = [];
 
+  const cubeTransforms: THREE.Matrix4[] = [];
   const matrix = new THREE.Matrix4();
   const quat = new THREE.Quaternion();
   const euler = new THREE.Euler();
@@ -49,6 +55,7 @@ export function createTunnel(): TunnelScene {
     matrix.compose(p, quat, scale);
     boxes.push(baseBox.clone().applyMatrix4(matrix));
     edges.push(baseEdges.clone().applyMatrix4(matrix));
+    cubeTransforms.push(matrix.clone());
   }
 
   baseBox.dispose();
@@ -78,7 +85,7 @@ export function createTunnel(): TunnelScene {
   const group = new THREE.Group();
   group.add(new THREE.Mesh(mergedFill, fillMaterial));
   group.add(new LineSegments2(edgeGeometry, edgeMaterial));
-  return { object: group, edgeMaterial };
+  return { object: group, edgeMaterial, cubeTransforms };
 }
 
 function computeCellCenters(): THREE.Vector3[] {

@@ -37,6 +37,7 @@ export class PlayerController {
 
   private prevClientY: number | null = null;
   private pointerLocked = false;
+  private enabled = true;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", this.onKeyDown);
@@ -77,6 +78,18 @@ export class PlayerController {
     this.inputNow = 0;
   }
 
+  // Turn input processing on/off without tearing down listeners. Used by
+  // the debug view so held keys and mouse motion during map-panning don't
+  // leak into player state.
+  setEnabled(v: boolean): void {
+    this.enabled = v;
+    if (!v) {
+      this.holdingUp = false;
+      this.holdingDown = false;
+      this.prevClientY = null;
+    }
+  }
+
   dispose(): void {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
@@ -85,11 +98,13 @@ export class PlayerController {
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
+    if (!this.enabled) return;
     if (e.code === "ArrowUp" || e.code === "KeyW") this.holdingUp = true;
     else if (e.code === "ArrowDown" || e.code === "KeyS") this.holdingDown = true;
   };
 
   private onKeyUp = (e: KeyboardEvent) => {
+    if (!this.enabled) return;
     if (e.code === "ArrowUp" || e.code === "KeyW") this.holdingUp = false;
     else if (e.code === "ArrowDown" || e.code === "KeyS") this.holdingDown = false;
   };
@@ -102,6 +117,7 @@ export class PlayerController {
   };
 
   private onMouseMove = (e: MouseEvent) => {
+    if (!this.enabled) return;
     let deltaPx: number;
     if (this.pointerLocked) {
       deltaPx = e.movementY;

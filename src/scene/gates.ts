@@ -18,9 +18,15 @@ import {
   SLOT_COUNT,
 } from "../constants";
 
+export interface BarrierInfo {
+  readonly localCenter: THREE.Vector3;
+  readonly size: THREE.Vector3;
+}
+
 export interface GatesScene {
   object: THREE.Object3D;
   data: Gate[];
+  barriers: BarrierInfo[];
   edgeMaterial: LineMaterial;
 }
 
@@ -29,10 +35,12 @@ export interface GatesScene {
 // slot simply omitted from the merge (no barrier there).
 export function createGates(): GatesScene {
   const data: Gate[] = [];
+  const barriers: BarrierInfo[] = [];
   const fills: THREE.BufferGeometry[] = [];
   const edges: THREE.BufferGeometry[] = [];
 
   const slotHeight = CELL / SLOT_COUNT;
+  const barrierSize = new THREE.Vector3(CELL, slotHeight, GATE_THICKNESS);
   const baseBarrier = new THREE.BoxGeometry(CELL, slotHeight, GATE_THICKNESS);
   const baseEdges = new THREE.EdgesGeometry(baseBarrier, 40);
   const matrix = new THREE.Matrix4();
@@ -55,6 +63,10 @@ export function createGates(): GatesScene {
       matrix.makeTranslation(0, slotCenterY, gate.z);
       fills.push(baseBarrier.clone().applyMatrix4(matrix));
       edges.push(baseEdges.clone().applyMatrix4(matrix));
+      barriers.push({
+        localCenter: new THREE.Vector3(0, slotCenterY, gate.z),
+        size: barrierSize.clone(),
+      });
     }
   }
 
@@ -91,5 +103,5 @@ export function createGates(): GatesScene {
   const group = new THREE.Group();
   group.add(new THREE.Mesh(mergedFill, fillMaterial));
   group.add(new LineSegments2(edgeGeometry, edgeMaterial));
-  return { object: group, data, edgeMaterial };
+  return { object: group, data, barriers, edgeMaterial };
 }

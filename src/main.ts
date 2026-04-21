@@ -1,11 +1,16 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { checkCollision, slotForY } from "./collision";
 import type { Gate } from "./collision";
+import { DebugView } from "./debug-view";
+import type { DebugBbox } from "./debug-view";
+import type { BarrierInfo } from "./scene/gates";
 import {
   CAMERA_FAR,
   CAMERA_FOV,
   CAMERA_NEAR,
+  CELL,
   COLOR_BACKGROUND,
   FORWARD_SPEED,
 } from "./constants";
@@ -26,6 +31,9 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(COLOR_BACKGROUND);
+// Debug overlay renders as a second pass into a scissored viewport, so
+// the main render must not auto-clear between the two.
+renderer.autoClear = false;
 
 const scene = new THREE.Scene();
 
@@ -46,6 +54,8 @@ const edgeMaterials: LineMaterial[] = [];
 interface Straight {
   readonly group: THREE.Object3D;
   readonly gates: readonly Gate[];
+  readonly barriers: readonly BarrierInfo[];
+  readonly cubeTransforms: readonly THREE.Matrix4[];
 }
 
 function buildStraight(name: string): Straight {
@@ -56,7 +66,12 @@ function buildStraight(name: string): Straight {
   group.name = name;
   group.add(tunnel.object);
   group.add(gates.object);
-  return { group, gates: gates.data };
+  return {
+    group,
+    gates: gates.data,
+    barriers: gates.barriers,
+    cubeTransforms: tunnel.cubeTransforms,
+  };
 }
 
 const straight1 = buildStraight("straight1");
@@ -86,9 +101,66 @@ addEventListener("resize", () => {
 const clock = new THREE.Clock();
 const player = new PlayerController(canvas);
 
+// Compute debug bboxes in world space for each straight group and each
+// individual barrier inside its gates. updateMatrixWorld first so
+// straight2's positioned/rotated transform is baked in.
+const COLOR_STRAIGHT_BOX = 0xffff00;
+const COLOR_BARRIER_BOX = 0xff6060;
+const COLOR_CUBE_BOX = 0x4080c0;
+const debugBboxes: DebugBbox[] = [];
+for (const s of straights) {
+  s.group.updateMatrixWorld(true);
+  debugBboxes.push({
+    box: new THREE.Box3().setFromObject(s.group),
+    color: COLOR_STRAIGHT_BOX,
+  });
+  for (const b of s.barriers) {
+    const box = new THREE.Box3().setFromCenterAndSize(b.localCenter, b.size);
+    box.applyMatrix4(s.group.matrixWorld);
+    debugBboxes.push({ box, color: COLOR_BARRIER_BOX });
+  }
+}
+
+const debugView = new DebugView(scene, canvas, debugBboxes);
+
+// Per-cube oriented bboxes merged into one LineSegments. Each cube uses
+// its full local transform (translation + ±CUBE_JITTER_DEG rotation), then
+// composed with the straight's world matrix. 1920 cubes cost one draw
+// call.
+const cubeBboxLines = buildCubeBboxLines(straights, COLOR_CUBE_BOX);
+scene.add(cubeBboxLines);
+
+function buildCubeBboxLines(
+  straights: readonly Straight[],
+  color: number,
+): THREE.LineSegments {
+  const cubeBox = new THREE.BoxGeometry(CELL, CELL, CELL);
+  const cubeEdges = new THREE.EdgesGeometry(cubeBox, 40);
+  const geoms: THREE.BufferGeometry[] = [];
+  const worldMatrix = new THREE.Matrix4();
+  for (const s of straights) {
+    for (const localMat of s.cubeTransforms) {
+      worldMatrix.multiplyMatrices(s.group.matrixWorld, localMat);
+      geoms.push(cubeEdges.clone().applyMatrix4(worldMatrix));
+    }
+  }
+  const merged = mergeGeometries(geoms, false);
+  if (!merged) throw new Error("Failed to merge cube bbox geometry");
+  for (const g of geoms) g.dispose();
+  cubeBox.dispose();
+  cubeEdges.dispose();
+  const lines = new THREE.LineSegments(
+    merged,
+    new THREE.LineBasicMaterial({ color }),
+  );
+  lines.layers.set(1);
+  return lines;
+}
+
 let dead = false;
 let pathS = 0;
 let motionScale = 1;
+let invincible = false;
 
 const tmpLocalPrev = new THREE.Vector3();
 const tmpLocalCurr = new THREE.Vector3();
@@ -155,7 +227,7 @@ renderer.setAnimationLoop(() => {
   camera.position.set(pose.pos.x, pose.pos.y + playerY, pose.pos.z);
   camera.rotation.y = pose.yaw;
 
-  if (!dead && !wrapped) {
+  if (!dead && !wrapped && !invincible) {
     const hit = collisionAcrossStraights(prevWorldPos, camera.position);
     if (hit) {
       dead = true;
@@ -165,11 +237,29 @@ renderer.setAnimationLoop(() => {
     }
   }
 
+  debugView.updatePlayerBox(camera.position);
+
+  // Main render: full-viewport game view, clearing both color and depth.
+  renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+  renderer.clear();
   renderer.render(scene, camera);
+
+  // Debug overlay: helpers drawn on top with a fresh depth buffer but the
+  // same color buffer — the game view shows wherever helper lines don't
+  // rasterize. Debug camera is on layer 1 only, so this pass renders
+  // only the bboxes (not the tunnel/gate geometry twice).
+  if (debugView.isActive) {
+    renderer.clearDepth();
+    renderer.render(scene, debugView.camera);
+  }
 });
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR") respawn();
+  else if (e.code === "KeyI") {
+    invincible = !invincible;
+    console.log(`invincibility: ${invincible ? "ON" : "OFF"}`);
+  }
 });
 
 canvas.addEventListener("click", () => {
