@@ -23,6 +23,12 @@ export const CAMERA_FAR = 200;
 // Camera sits inside the hollow, just in front of the tunnel entrance.
 export const CAMERA_START = { x: 0, y: 0, z: 2 };
 
+// Auto-forward scroll speed (world units / second). With CELL=1 and one gate
+// per beat, BPM = FORWARD_SPEED * 60 / gate_spacing_in_cells. 10 u/s with a
+// 5-cell gate spacing ≈ 120 BPM. Tune by feel during milestones 2–4, then
+// lock before procedural generation (plan §8).
+export const FORWARD_SPEED = 10;
+
 // Placeholder palette. Aesthetic is deliberately not locked yet (plan §7 —
 // aesthetic decisions come after the game is working).
 export const COLOR_BACKGROUND = 0x000000;

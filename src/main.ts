@@ -4,7 +4,10 @@ import {
   CAMERA_FOV,
   CAMERA_NEAR,
   CAMERA_START,
+  CELL,
   COLOR_BACKGROUND,
+  FORWARD_SPEED,
+  TUNNEL_DEPTH,
 } from "./constants";
 import { createTunnel } from "./scene/tunnel";
 
@@ -45,6 +48,18 @@ addEventListener("resize", () => {
   tunnel.edgeMaterial.resolution.set(window.innerWidth, window.innerHeight);
 });
 
+// Loop the camera back to the start when it exits the far end. Milestone 2
+// has a single straight, so this is a free infinite runway for feel-tuning
+// FORWARD_SPEED. Real corridor recycling happens in milestones 5+.
+const LOOP_END_Z = -TUNNEL_DEPTH * CELL;
+const LOOP_LENGTH = CAMERA_START.z - LOOP_END_Z;
+const clock = new THREE.Clock();
+
 renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  camera.position.z -= FORWARD_SPEED * dt;
+  if (camera.position.z < LOOP_END_Z) {
+    camera.position.z += LOOP_LENGTH;
+  }
   renderer.render(scene, camera);
 });

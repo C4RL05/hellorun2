@@ -12,7 +12,9 @@ import { PNG } from "pngjs";
 
 const URL = process.env.HELLORUN_URL || "http://localhost:5173";
 const OUT = process.env.HELLORUN_SCREENSHOT || "tools/screenshots/tunnel.png";
+const OUT2 = OUT.replace(/\.png$/, ".t+500ms.png");
 const VIEWPORT = { width: 1280, height: 720 };
+const MOTION_DELAY_MS = 500;
 
 const pageErrors = [];
 const consoleErrors = [];
@@ -41,6 +43,8 @@ try {
   );
   await mkdir(dirname(OUT), { recursive: true });
   await page.screenshot({ path: OUT });
+  await new Promise((r) => setTimeout(r, MOTION_DELAY_MS));
+  await page.screenshot({ path: OUT2 });
 } finally {
   await browser.close();
 }
@@ -61,7 +65,7 @@ if (consoleWarnings.length) {
 
 const pixelStats = await analyzeScreenshot(OUT);
 report.push(
-  `PIXEL STATS:`,
+  `PIXEL STATS (t=0):`,
   `  size: ${pixelStats.width}×${pixelStats.height}`,
   `  non-black: ${pixelStats.nonBlackPct.toFixed(2)}% (${pixelStats.nonBlack.toLocaleString()} / ${pixelStats.total.toLocaleString()} px)`,
   `  avg RGB: (${pixelStats.avg.map((v) => v.toFixed(1)).join(", ")})`,
@@ -71,9 +75,43 @@ report.push(
     .join(", ")}`,
 );
 
+const motionDiff = await diffScreenshots(OUT, OUT2);
+report.push(
+  `MOTION CHECK (t=0 vs t=${MOTION_DELAY_MS}ms):`,
+  `  differing pixels: ${motionDiff.diffPct.toFixed(2)}% (${motionDiff.diffCount.toLocaleString()} / ${motionDiff.total.toLocaleString()} px)`,
+  `  mean per-channel delta on changed pixels: ${motionDiff.meanDelta.toFixed(2)}`,
+  `  verdict: ${motionDiff.diffPct > 0.5 ? "MOTION DETECTED" : "scene appears static"}`,
+);
+
 console.log(report.join("\n"));
 console.log(`Screenshot: ${OUT}`);
 if (pageErrors.length || consoleErrors.length) process.exit(1);
+
+async function diffScreenshots(pathA, pathB) {
+  const a = PNG.sync.read(await readFile(pathA));
+  const b = PNG.sync.read(await readFile(pathB));
+  if (a.width !== b.width || a.height !== b.height) {
+    throw new Error("screenshot dimensions differ");
+  }
+  const total = a.width * a.height;
+  let diffCount = 0;
+  let deltaSum = 0;
+  for (let i = 0; i < a.data.length; i += 4) {
+    const dr = Math.abs(a.data[i] - b.data[i]);
+    const dg = Math.abs(a.data[i + 1] - b.data[i + 1]);
+    const db = Math.abs(a.data[i + 2] - b.data[i + 2]);
+    if (dr + dg + db > 0) {
+      diffCount++;
+      deltaSum += (dr + dg + db) / 3;
+    }
+  }
+  return {
+    total,
+    diffCount,
+    diffPct: (diffCount / total) * 100,
+    meanDelta: diffCount === 0 ? 0 : deltaSum / diffCount,
+  };
+}
 
 async function analyzeScreenshot(path) {
   const buf = await readFile(path);
