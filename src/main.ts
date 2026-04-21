@@ -9,6 +9,7 @@ import {
   FORWARD_SPEED,
   TUNNEL_DEPTH,
 } from "./constants";
+import { PlayerController } from "./player";
 import { createTunnel } from "./scene/tunnel";
 
 const canvas = document.createElement("canvas");
@@ -54,6 +55,7 @@ addEventListener("resize", () => {
 const LOOP_END_Z = -TUNNEL_DEPTH * CELL;
 const LOOP_LENGTH = CAMERA_START.z - LOOP_END_Z;
 const clock = new THREE.Clock();
+const player = new PlayerController(canvas);
 
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
@@ -61,5 +63,12 @@ renderer.setAnimationLoop(() => {
   if (camera.position.z < LOOP_END_Z) {
     camera.position.z += LOOP_LENGTH;
   }
+  camera.position.y = player.update(dt);
   renderer.render(scene, camera);
 });
+
+// Dev-only inspection hook — lets tools/input-check.mjs read camera state
+// without parsing pixels.
+if (import.meta.env.DEV) {
+  (window as unknown as { __camera: THREE.Camera }).__camera = camera;
+}

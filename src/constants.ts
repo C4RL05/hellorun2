@@ -29,6 +29,26 @@ export const CAMERA_START = { x: 0, y: 0, z: 2 };
 // lock before procedural generation (plan §8).
 export const FORWARD_SPEED = 10;
 
+// Player vertical movement (plan §1, milestone 3).
+// Input pipeline: all sources feed a normalized `inputTarget` in [-1, +1],
+// which an eased `inputNow` follows for rendering. Final camera Y is
+// inputNow mapped to [PLAYER_Y_MIN, PLAYER_Y_MAX].
+export const PLAYER_Y_MIN = -0.4;
+export const PLAYER_Y_MAX = 0.4;
+
+// Keyboard rate: normalized units/second while a key is held. 8 means a full
+// clamp-to-clamp traversal in 0.25s of continuous input (before easing).
+export const KEY_SENSITIVITY = 8;
+
+// Mouse sensitivity: normalized units per viewport-half of mouse Y movement.
+// 2 means moving the mouse half the viewport height pushes inputTarget by 1
+// (half the corridor). Resolution-independent by construction.
+export const MOUSE_SENSITIVITY = 2;
+
+// Exponential smoothing rate (1/s) for inputNow → inputTarget. Higher =
+// snappier, lower = floatier. 15 ≈ 67ms time constant.
+export const INPUT_EASE_RATE = 15;
+
 // Placeholder palette. Aesthetic is deliberately not locked yet (plan §7 —
 // aesthetic decisions come after the game is working).
 export const COLOR_BACKGROUND = 0x000000;
