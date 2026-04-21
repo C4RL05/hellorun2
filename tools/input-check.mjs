@@ -23,8 +23,10 @@ try {
     timeout: 5_000,
   });
 
-  // Freeze forward motion so collision with gates doesn't interrupt the
-  // input trace mid-test. Input wiring is a separable concern from gameplay.
+  // Dismiss title overlay so its click handler doesn't eat the pointer-lock
+  // click test later. Then freeze forward motion so collision doesn't
+  // interrupt the input trace.
+  await page.evaluate(() => window.__startGame());
   await page.evaluate(() => window.__setMotionScale(0));
 
   const samples = [];

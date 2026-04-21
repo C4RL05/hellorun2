@@ -19,7 +19,9 @@ await page.waitForFunction(() => window.__setPathS !== undefined, {
   timeout: 5_000,
 });
 
-// Freeze the render loop so pathS stays where we set it.
+// Dismiss title overlay and freeze the render loop so pathS stays where
+// we set it.
+await page.evaluate(() => window.__startGame());
 await page.evaluate(() => window.__setMotionScale(0));
 await mkdir(OUT_DIR, { recursive: true });
 

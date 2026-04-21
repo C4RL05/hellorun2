@@ -19,9 +19,9 @@ try {
     timeout: 5_000,
   });
 
-  // Freeze forward motion and respawn so the game view is a deterministic
-  // spawn-pose frame rather than whatever the camera drifted into during
-  // page load.
+  // Dismiss title overlay and freeze motion so the game view is a
+  // deterministic spawn-pose frame.
+  await page.evaluate(() => window.__startGame());
   await page.evaluate(() => window.__setMotionScale(0));
   await page.evaluate(() => window.__respawn());
 

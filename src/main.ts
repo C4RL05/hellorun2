@@ -23,6 +23,7 @@ import {
 import { PlayerController } from "./player";
 import { createGates } from "./scene/gates";
 import { createTunnel } from "./scene/tunnel";
+import { devSong } from "./songs";
 
 const canvas = document.createElement("canvas");
 document.body.appendChild(canvas);
@@ -159,8 +160,100 @@ function buildCubeBboxLines(
 
 let dead = false;
 let pathS = 0;
+// Monotonic distance traveled — tracks total meters regardless of corridor
+// wrap. Used to derive pathS and to detect loop wraparounds under the
+// audio clock (where a frame can in principle jump across multiple wraps).
+let totalPathS = 0;
 let motionScale = 1;
 let invincible = false;
+// Plan §1: "A run = a song. Game starts when the song starts, ends when
+// the song ends (or the player dies)." `running` gates pathS advancement
+// so nothing moves until the user clicks the title screen.
+let running = false;
+
+// Audio pipeline. Preload on boot; play on user gesture (click).
+let audioCtx: AudioContext | null = null;
+let audioBuffer: AudioBuffer | null = null;
+let audioSource: AudioBufferSourceNode | null = null;
+// AudioContext.currentTime at which the song's first sample started.
+// Subtracting this (and gridOffsetSec) from audioCtx.currentTime gives
+// "audio time since beat 1" — the master clock for pathS.
+let audioStartTime = 0;
+
+const titleOverlay = document.getElementById("title-screen");
+const titleSubtitle = titleOverlay?.querySelector(".subtitle") as
+  | HTMLElement
+  | null;
+
+async function loadAudio(): Promise<void> {
+  audioCtx = new AudioContext();
+  const res = await fetch(devSong.url);
+  if (!res.ok) throw new Error(`audio fetch failed (${res.status})`);
+  const arr = await res.arrayBuffer();
+  audioBuffer = await audioCtx.decodeAudioData(arr);
+}
+
+function startAudio(): void {
+  if (!audioCtx || !audioBuffer) return;
+  // Autoplay policy: AudioContext may start suspended; resume inside the
+  // user-gesture call chain.
+  void audioCtx.resume();
+  audioSource = audioCtx.createBufferSource();
+  audioSource.buffer = audioBuffer;
+  audioSource.connect(audioCtx.destination);
+  audioSource.onended = () => {
+    running = false;
+  };
+  audioStartTime = audioCtx.currentTime;
+  audioSource.start();
+}
+
+// Seconds since beat 1 of the song (negative during the intro if
+// gridOffsetSec > 0). Returns null if no audio is actively playing —
+// callers should fall back to wall-clock advance in that case.
+function getAudioNow(): number | null {
+  if (!audioCtx || !audioSource) return null;
+  if (audioCtx.state !== "running") return null;
+  return audioCtx.currentTime - audioStartTime - devSong.gridOffsetSec;
+}
+
+function stopAudio(): void {
+  if (!audioSource) return;
+  // Null the handler first so the manual stop() doesn't flip running=false.
+  // running is managed by the caller (respawn keeps it true; collision
+  // leaves it true because the `if (running && !dead)` guard already
+  // freezes pathS).
+  audioSource.onended = null;
+  try {
+    audioSource.stop();
+  } catch {
+    // stop() throws if the source hasn't started; safe to ignore.
+  }
+  audioSource.disconnect();
+  audioSource = null;
+}
+
+function startGame(): void {
+  if (running) return;
+  startAudio();
+  running = true;
+  titleOverlay?.classList.add("hidden");
+}
+
+titleOverlay?.addEventListener("click", () => {
+  if (audioBuffer) startGame();
+});
+
+loadAudio()
+  .then(() => {
+    if (titleSubtitle) titleSubtitle.textContent = "click to start";
+  })
+  .catch((err) => {
+    console.error("audio load failed:", err);
+    if (titleSubtitle)
+      titleSubtitle.textContent =
+        "audio missing — drop an mp3 at public/dev-song.mp3";
+  });
 
 const tmpLocalPrev = new THREE.Vector3();
 const tmpLocalCurr = new THREE.Vector3();
@@ -195,8 +288,11 @@ function collisionAcrossStraights(
 
 const prevWorldPos = new THREE.Vector3();
 
-const respawn = () => {
+// State-only reset: camera, player input, dead flag. Doesn't touch audio
+// or the running flag. Used at boot and by the __respawn dev hook.
+const resetToSpawn = () => {
   pathS = 0;
+  totalPathS = 0;
   player.reset();
   dead = false;
   const pose = samplePath(0);
@@ -205,8 +301,20 @@ const respawn = () => {
   prevWorldPos.copy(camera.position);
 };
 
+// Full user-facing respawn: reset state, rewind the song to its start,
+// resume play. Plan §1: "A run = a song" — each respawn is a new run.
+const respawn = () => {
+  resetToSpawn();
+  if (audioBuffer) {
+    stopAudio();
+    startAudio();
+  }
+  running = true;
+  titleOverlay?.classList.add("hidden");
+};
+
 // Seed initial pose before the first frame.
-respawn();
+resetToSpawn();
 
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
@@ -215,12 +323,26 @@ renderer.setAnimationLoop(() => {
   prevWorldPos.copy(camera.position);
 
   let wrapped = false;
-  if (!dead) {
-    pathS += FORWARD_SPEED * motionScale * dt;
-    if (pathS >= PATH_TOTAL) {
-      pathS -= PATH_TOTAL;
-      wrapped = true;
+  if (running && !dead) {
+    const prevTotal = totalPathS;
+    if (motionScale === 1) {
+      // Real play: audio clock is master. Falls back to wall-clock when
+      // no audio is playing yet (e.g., headless tests without a user
+      // gesture).
+      const audioNow = getAudioNow();
+      if (audioNow !== null) {
+        totalPathS = Math.max(0, audioNow * FORWARD_SPEED);
+      } else {
+        totalPathS += FORWARD_SPEED * dt;
+      }
+    } else {
+      // Scaled test mode: wall-clock advance with the scale factor.
+      // motionScale=0 freezes motion entirely.
+      totalPathS += FORWARD_SPEED * motionScale * dt;
     }
+    wrapped =
+      Math.floor(totalPathS / PATH_TOTAL) !== Math.floor(prevTotal / PATH_TOTAL);
+    pathS = totalPathS % PATH_TOTAL;
   }
 
   const pose = samplePath(pathS);
@@ -231,6 +353,7 @@ renderer.setAnimationLoop(() => {
     const hit = collisionAcrossStraights(prevWorldPos, camera.position);
     if (hit) {
       dead = true;
+      stopAudio();
       console.log(
         `GAME OVER — ${hit.straight} gate z=${hit.gate.z.toFixed(2)}, needed slot ${hit.gate.openSlot}, player in slot ${hit.playerSlot}. Press R or click to respawn.`,
       );
@@ -263,9 +386,14 @@ window.addEventListener("keydown", (e) => {
 });
 
 canvas.addEventListener("click", () => {
-  if (dead) respawn();
+  if (!running && audioBuffer) startGame();
+  else if (dead) respawn();
   else player.requestPointerLockIfNeeded();
 });
+
+// Suppress the browser's right-click context menu globally — RMB is a
+// game input (debug-view pan), never "open a context menu."
+window.addEventListener("contextmenu", (e) => e.preventDefault());
 
 if (import.meta.env.DEV) {
   const w = window as unknown as {
@@ -274,15 +402,26 @@ if (import.meta.env.DEV) {
     __setMotionScale: (s: number) => void;
     __isDead: () => boolean;
     __getPathS: () => number;
+    __setPathS: (s: number) => void;
+    // Bypasses the title overlay + audio gesture requirement. Sets the
+    // running flag and hides the overlay so tools can exercise gameplay
+    // without clicking to start.
+    __startGame: () => void;
   };
   w.__camera = camera;
-  w.__respawn = respawn;
+  // Dev hook uses the state-only reset — tests don't need (and can't
+  // trigger without a user gesture) the audio rewind.
+  w.__respawn = resetToSpawn;
   w.__setMotionScale = (s) => {
     motionScale = s;
   };
   w.__isDead = () => dead;
   w.__getPathS = () => pathS;
-  (w as unknown as { __setPathS: (s: number) => void }).__setPathS = (s) => {
+  w.__setPathS = (s) => {
     pathS = s;
+  };
+  w.__startGame = () => {
+    running = true;
+    titleOverlay?.classList.add("hidden");
   };
 }

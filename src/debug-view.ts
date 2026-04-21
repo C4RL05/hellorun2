@@ -81,7 +81,6 @@ export class DebugView {
     canvas.addEventListener("mousedown", this.onMouseDown);
     canvas.addEventListener("mouseup", this.onMouseUp);
     canvas.addEventListener("mousemove", this.onMouseMove);
-    canvas.addEventListener("contextmenu", this.onContextMenu);
     window.addEventListener("resize", this.onResize);
   }
 
@@ -142,10 +141,6 @@ export class DebugView {
     this.orthoCamera.position.z -= e.movementY * worldPerPixel;
     // Keep player input from also reacting to the drag motion.
     e.stopPropagation();
-  };
-
-  private onContextMenu = (e: MouseEvent) => {
-    if (this.active) e.preventDefault();
   };
 
   private onResize = () => {

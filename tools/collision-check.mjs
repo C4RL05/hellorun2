@@ -19,6 +19,10 @@ try {
     timeout: 5_000,
   });
 
+  // Dismiss the title overlay and enable motion so the camera actually
+  // advances through the corridor.
+  await page.evaluate(() => window.__startGame());
+
   // Scenario 1: no steering, expect death around gate 1 (~0.95s).
   await page.evaluate(() => window.__respawn());
   await page.waitForTimeout(1_400);
