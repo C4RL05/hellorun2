@@ -83,6 +83,15 @@ export const GATE_OPEN_SLOTS = [1, 2, 0, 1, 2, 0, 1, 2];
 export const COLOR_BARRIER = 0xaa2020;
 export const COLOR_BARRIER_EDGE = 0xff2020;
 
+// Turn / corner geometry (plan §2 milestone 5, §8 feel spec).
+// TURN_RADIUS is in world units; TURN_ARC_LENGTH is a quarter-circle.
+// At FORWARD_SPEED=10 a radius-5 turn takes ~0.785s to traverse.
+// Plan prescribes arcing during "beat 4" of the bar; at 120 BPM that's
+// 0.5s/beat, so the numbers don't line up yet — tune during M5 before
+// procedural generation locks them in.
+export const TURN_RADIUS = 5;
+export const TURN_ARC_LENGTH = Math.PI * TURN_RADIUS * 0.5;
+
 // Fill opacity for barrier slabs. The bright red edges are opaque so the
 // barrier shape stays legible at distance; the fill is see-through so you
 // can read the next gate's open slot through nearer barriers.
