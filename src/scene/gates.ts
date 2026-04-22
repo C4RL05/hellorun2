@@ -5,6 +5,7 @@ import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import type { Gate } from "../collision";
 import {
+  BARRIER_CELLS_WIDE,
   BARRIER_OPACITY,
   CELL,
   COLOR_BARRIER,
@@ -45,9 +46,19 @@ export function createGates(openSlots: readonly number[]): GatesScene {
   const edges: THREE.BufferGeometry[] = [];
 
   const slotHeight = CELL / SLOT_COUNT;
-  const barrierSize = new THREE.Vector3(CELL, slotHeight, GATE_THICKNESS);
-  const baseBarrier = new THREE.BoxGeometry(CELL, slotHeight, GATE_THICKNESS);
-  const baseEdges = new THREE.EdgesGeometry(baseBarrier, 40);
+  const barrierWidth = BARRIER_CELLS_WIDE * slotHeight;
+  const barrierSize = new THREE.Vector3(barrierWidth, slotHeight, GATE_THICKNESS);
+  const baseBarrier = new THREE.BoxGeometry(
+    barrierWidth,
+    slotHeight,
+    GATE_THICKNESS,
+  );
+  const baseEdges = buildBarrierEdgeGeometry(
+    barrierWidth,
+    slotHeight,
+    GATE_THICKNESS,
+    BARRIER_CELLS_WIDE,
+  );
   const matrix = new THREE.Matrix4();
 
   // Build chart data in logical order (gate 0 = first chronologically).
@@ -108,4 +119,37 @@ export function createGates(openSlots: readonly number[]): GatesScene {
   group.add(new THREE.Mesh(mergedFill, fillMaterial));
   group.add(new LineSegments2(edgeGeometry, edgeMaterial));
   return { object: group, data, barriers, edgeMaterial };
+}
+
+// Barrier edges: the 12 edges of the box (same set `EdgesGeometry` would
+// give at threshold 40°) plus (cellsWide − 1) internal vertical dividers on
+// both the front and back faces, so the slab reads as a row of square cells
+// from any viewing angle.
+function buildBarrierEdgeGeometry(
+  width: number,
+  height: number,
+  depth: number,
+  cellsWide: number,
+): THREE.BufferGeometry {
+  const box = new THREE.BoxGeometry(width, height, depth);
+  const boxEdges = new THREE.EdgesGeometry(box, 40);
+  const positions: number[] = Array.from(
+    boxEdges.attributes.position.array as Float32Array,
+  );
+  box.dispose();
+  boxEdges.dispose();
+  const halfH = height * 0.5;
+  const halfD = depth * 0.5;
+  for (let k = 1; k < cellsWide; k++) {
+    const x = -width * 0.5 + (k * width) / cellsWide;
+    // Front face divider (z = -halfD) and back face divider (z = +halfD).
+    positions.push(x, -halfH, -halfD, x, halfH, -halfD);
+    positions.push(x, -halfH, halfD, x, halfH, halfD);
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+  return geom;
 }

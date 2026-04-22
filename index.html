@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HelloRun 2</title>
     <style>
+      /* Bundled under SIL Open Font License 1.1 — see public/fonts/OFL.txt.
+         "undefined medium" by Andi Rueckel (https://undefined-medium.com). */
+      @font-face {
+        font-family: "undefined medium";
+        src: url("/fonts/undefined-medium.woff2") format("woff2"),
+             url("/fonts/undefined-medium.woff") format("woff");
+        font-weight: normal;
+        font-style: normal;
+        font-display: block;
+      }
       html,
       body {
         margin: 0;
@@ -24,7 +34,9 @@
         align-items: center;
         background: rgba(0, 0, 0, 0.55);
         color: #00aaff;
-        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-family: "undefined medium", ui-monospace, Menlo, Consolas, monospace;
+        text-transform: uppercase;
+        letter-spacing: 0.2em;
         z-index: 10;
         cursor: pointer;
         user-select: none;
@@ -33,13 +45,13 @@
         margin: 0;
         font-weight: 300;
         font-size: clamp(2rem, 6vw, 4.5rem);
-        letter-spacing: 0.5em;
-        text-indent: 0.5em;
+        /* letter-spacing applies to trailing chars too, nudging the line
+           off-center; a matching text-indent compensates. */
+        text-indent: 0.2em;
       }
       #title-screen .subtitle {
         margin-top: 1.5rem;
         opacity: 0.65;
-        letter-spacing: 0.3em;
         font-size: clamp(0.75rem, 1.4vw, 1rem);
       }
       #drop-zone {
@@ -50,7 +62,6 @@
         opacity: 0.65;
         transition: opacity 0.2s, background 0.2s, border-color 0.2s;
         font-size: clamp(0.7rem, 1.3vw, 0.9rem);
-        letter-spacing: 0.25em;
         cursor: pointer;
         text-align: center;
       }

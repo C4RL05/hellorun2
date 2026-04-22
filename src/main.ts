@@ -96,9 +96,16 @@ let prevEndSlot: number | null = null;
 // PRNG for chart generation. Seeded via ?seed=N for deterministic tests;
 // otherwise Math.random. Reused across sections so the whole run is one
 // reproducible sequence under a fixed seed.
-const seedParam = new URL(window.location.href).searchParams.get("seed");
+const urlParams = new URL(window.location.href).searchParams;
+const seedParam = urlParams.get("seed");
 const chartRand =
   seedParam !== null ? mulberry32(parseInt(seedParam, 10) || 0) : Math.random;
+
+// Developer-mode flag. Gates the keyboard shortcuts for pause (Space),
+// marker toggle (B), debug overlay (M), and invincibility (I) — these are
+// playtest / debug tools, not gameplay. Always on in dev builds; in a
+// production build, opt in with `?dev` in the URL.
+const devMode = import.meta.env.DEV || urlParams.has("dev");
 
 const COLOR_STRAIGHT_BOX = 0xffff00;
 const COLOR_BARRIER_BOX = 0xff6060;
@@ -238,6 +245,12 @@ let nextBarIdx = 1;
 let nextPhraseIdx = 1;
 let nextSectionIdx = 1;
 
+// All musical-structure markers (beat/bar/phrase/section) are toggleable
+// with B and start disabled. They're a debug/playtest aid — the gate
+// cadence already tells the player what the beat is — so they're opt-in.
+let markersVisible = false;
+const markers: THREE.Object3D[] = [];
+
 function placeMarkersUpTo(maxPathS: number): void {
   placeOneKind(maxPathS, BEAT_LENGTH, MARKER_BEAT_SIZE, MARKER_BEAT_COLOR, () => nextBeatIdx, (n) => { nextBeatIdx = n; });
   placeOneKind(maxPathS, BAR_LENGTH, MARKER_BAR_SIZE, MARKER_BAR_COLOR, () => nextBarIdx, (n) => { nextBarIdx = n; });
@@ -260,10 +273,17 @@ function placeOneKind(
     const marker = createMarker(size, color);
     marker.position.copy(pose.pos);
     marker.rotation.y = pose.yaw;
+    marker.visible = markersVisible;
     scene.add(marker);
+    markers.push(marker);
     i++;
   }
   setIdx(i);
+}
+
+function toggleMarkers(): void {
+  markersVisible = !markersVisible;
+  for (const m of markers) m.visible = markersVisible;
 }
 
 const syncResolution = () => {
@@ -287,7 +307,7 @@ const player = new PlayerController(canvas);
 // appended (see registerStraightDebugHelpers). Per-cube OBB lines were a
 // static-only visual and have been dropped — they would need re-merging
 // every time a new section is generated and weren't worth the complexity.
-const debugView = new DebugView(scene, canvas, []);
+const debugView = new DebugView(scene, canvas, [], { enabled: devMode });
 
 // Seed the corridor with enough sections to cover the lookahead before the
 // first frame renders. ensureSectionsAhead appends straights/turns until
@@ -693,13 +713,17 @@ renderer.setAnimationLoop(() => {
 });
 
 window.addEventListener("keydown", (e) => {
+  // Core gameplay keys — always available.
   if (e.code === "KeyR") respawn();
   else if (e.code === "Escape") quitToTitle();
-  else if (e.code === "Space") {
+  // Dev-only: Space pause, B marker toggle, I invincibility. M (debug
+  // overlay) is gated inside DebugView via its `enabled` option.
+  else if (devMode && e.code === "Space") {
     e.preventDefault(); // don't scroll the page
     togglePause();
-  }
-  else if (e.code === "KeyI") {
+  } else if (devMode && e.code === "KeyB") {
+    toggleMarkers();
+  } else if (devMode && e.code === "KeyI") {
     invincible = !invincible;
     console.log(`invincibility: ${invincible ? "ON" : "OFF"}`);
   }

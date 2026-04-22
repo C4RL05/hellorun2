@@ -30,10 +30,18 @@ export interface DebugBbox {
   readonly color?: number;
 }
 
+export interface DebugViewOptions {
+  // When false, the M / wheel / RMB interactions are no-ops — the overlay
+  // is inert. `isActive` stays false so the render loop skips the second
+  // pass. Used to gate the debug overlay behind the dev-mode flag.
+  readonly enabled?: boolean;
+}
+
 export class DebugView {
   private readonly orthoCamera: THREE.OrthographicCamera;
   private readonly helpers: THREE.Group;
   private readonly playerBox: THREE.Box3;
+  private readonly enabled: boolean;
   private active = false;
   private dragging = false;
 
@@ -41,7 +49,9 @@ export class DebugView {
     scene: THREE.Scene,
     canvas: HTMLCanvasElement,
     bboxes: readonly DebugBbox[],
+    options: DebugViewOptions = {},
   ) {
+    this.enabled = options.enabled ?? true;
     const aspect = window.innerWidth / window.innerHeight;
     this.orthoCamera = new THREE.OrthographicCamera(
       -FRUSTUM_SIZE * aspect * 0.5,
@@ -117,6 +127,7 @@ export class DebugView {
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
+    if (!this.enabled) return;
     if (e.code === "KeyM") {
       this.active = !this.active;
     }

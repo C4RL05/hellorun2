@@ -94,6 +94,12 @@ export const GATE_COUNT =
 export const FIRST_GATE_Z = -FIRST_GATE_BEAT * BEAT_LENGTH;
 export const GATE_THICKNESS = 0.15;
 export const SLOT_COUNT = 3;
+// Number of horizontal cells per barrier slab. At BARRIER_CELLS_WIDE=4 and
+// slotHeight=CELL/SLOT_COUNT, the barrier is 4 × slotHeight wide × slotHeight
+// tall — visible face is 4 square cells outlined by the edge material
+// (box outline + 3 internal vertical dividers). Purely visual: collision
+// only cares about the player's Y slot, not the barrier's X extent.
+export const BARRIER_CELLS_WIDE = 4;
 
 // Plan §5: closed-barrier color is fixed (red or amber) regardless of scene
 // palette. Danger must mean the same thing visually in every section.
@@ -117,7 +123,7 @@ export const TURN_RADIUS = (2 * TURN_ARC_LENGTH) / Math.PI;
 // Fill opacity for barrier slabs. The bright red edges are opaque so the
 // barrier shape stays legible at distance; the fill is see-through so you
 // can read the next gate's open slot through nearer barriers.
-export const BARRIER_OPACITY = 0.3;
+export const BARRIER_OPACITY = 0.5;
 
 // Musical-structure markers. Square borders placed perpendicular to the
 // path at every beat / bar / phrase / section boundary so the player flies

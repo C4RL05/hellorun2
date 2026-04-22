@@ -38,6 +38,7 @@ node tools/debug-view-check.mjs
 Append to `http://localhost:5173/?...`:
 
 - `?seed=N` — Seeds the chart generator's PRNG (mulberry32) with integer N. Deterministic charts for reproducible runs. `tools/collision-check.mjs` uses `?seed=1` so it gets a chart with a lethal gate regardless of today's `Math.random()` roll.
+- `?dev` — Enables developer-mode shortcuts in a production build: Space (pause/unpause), B (marker toggle), M (debug overlay), I (invincibility). Always-on in `npm run dev` builds via `import.meta.env.DEV`. Core gameplay keys (R = respawn, Esc = quit to title) stay available regardless.
 
 ## Dev hooks (`window.__*`)
 
