@@ -9,7 +9,10 @@
 
 import { chromium } from "playwright";
 
-const URL = process.env.HELLORUN_URL || "http://localhost:5173";
+// Seed the chart generator so we get a known chart with a lethal gate
+// early. Procedural generation can produce all-mid charts which would
+// make the collision test unable to exercise the death path.
+const URL = process.env.HELLORUN_URL || "http://localhost:5173/?seed=1";
 
 const browser = await chromium.launch({ channel: "chromium" });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });

@@ -37,10 +37,28 @@
         text-indent: 0.5em;
       }
       #title-screen .subtitle {
-        margin-top: 2rem;
+        margin-top: 1.5rem;
         opacity: 0.65;
         letter-spacing: 0.3em;
         font-size: clamp(0.75rem, 1.4vw, 1rem);
+      }
+      #drop-zone {
+        margin-top: 2rem;
+        padding: 1rem 2.25rem;
+        border: 1px dashed rgba(0, 170, 255, 0.55);
+        border-radius: 2px;
+        opacity: 0.65;
+        transition: opacity 0.2s, background 0.2s, border-color 0.2s;
+        font-size: clamp(0.7rem, 1.3vw, 0.9rem);
+        letter-spacing: 0.25em;
+        cursor: pointer;
+        text-align: center;
+      }
+      #drop-zone:hover,
+      #drop-zone.drag-over {
+        opacity: 1;
+        background: rgba(0, 170, 255, 0.08);
+        border-color: rgba(0, 170, 255, 1);
       }
       #title-screen.hidden {
         display: none;
@@ -51,6 +69,8 @@
     <div id="title-screen">
       <h1>HELLO RUN</h1>
       <p class="subtitle">loading audio…</p>
+      <div id="drop-zone">drag mp3 here or click to browse</div>
+      <input type="file" id="file-picker" accept="audio/*" hidden />
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

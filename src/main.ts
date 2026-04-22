@@ -214,35 +214,56 @@ const titleSubtitle = titleOverlay?.querySelector(".subtitle") as
   | HTMLElement
   | null;
 
-async function loadAudio(): Promise<void> {
-  audioCtx = new AudioContext();
-  const res = await fetch(devSong.url);
-  if (!res.ok) throw new Error(`audio fetch failed (${res.status})`);
-  const arr = await res.arrayBuffer();
-  audioBuffer = await audioCtx.decodeAudioData(arr);
+// Race-safe load: each call increments `analysisGen`; stale callbacks
+// check their captured gen against the latest and bail. Dropping a new
+// file during a prior analysis correctly supersedes it.
+let analysisGen = 0;
 
-  if (titleSubtitle) titleSubtitle.textContent = "analyzing audio…";
+async function loadAndAnalyzeSource(
+  source: File | string,
+  label: string,
+): Promise<void> {
+  const gen = ++analysisGen;
+  if (!audioCtx) audioCtx = new AudioContext();
+
+  const setSubtitle = (text: string) => {
+    if (gen === analysisGen && titleSubtitle) titleSubtitle.textContent = text;
+  };
+
   try {
-    songAnalysis = await analyzeAudio(audioBuffer, (p) => {
-      if (titleSubtitle) {
-        titleSubtitle.textContent = `analyzing audio: ${Math.round(p.progress * 100)}%`;
-      }
+    setSubtitle(`loading ${label}…`);
+    const arr =
+      source instanceof File
+        ? await source.arrayBuffer()
+        : await (await fetch(source)).arrayBuffer();
+    if (gen !== analysisGen) return;
+
+    // Tear down any prior audio source playing the old buffer, so the
+    // replacement isn't mixed with leftover audio.
+    stopAudio();
+    audioBuffer = await audioCtx.decodeAudioData(arr);
+    if (gen !== analysisGen) return;
+    songAnalysis = null;
+
+    setSubtitle("analyzing audio…");
+    const result = await analyzeAudio(audioBuffer, (p) => {
+      setSubtitle(`analyzing audio: ${Math.round(p.progress * 100)}%`);
     });
-    currentGridOffsetSec = songAnalysis.gridOffsetSec;
+    if (gen !== analysisGen) return;
+    songAnalysis = result;
+    currentGridOffsetSec = result.gridOffsetSec;
     console.log(
-      `analyzed: bpm=${songAnalysis.bpm.toFixed(2)}, ` +
-        `gridOffsetSec=${songAnalysis.gridOffsetSec.toFixed(3)}, ` +
-        `confidence=${songAnalysis.confidence.toFixed(2)}, ` +
-        `beats=${songAnalysis.beats.length}`,
+      `analyzed ${label}: bpm=${result.bpm.toFixed(2)}, ` +
+        `gridOffsetSec=${result.gridOffsetSec.toFixed(3)}, ` +
+        `confidence=${result.confidence.toFixed(2)}, ` +
+        `beats=${result.beats.length}`,
     );
+    setSubtitle("click to start");
   } catch (err) {
-    // Analysis failure falls back to devSong defaults. Game still runs —
-    // just at the hardcoded BPM/offset. Worth surfacing to the user so
-    // they know why sync might feel off.
-    console.error("analysis failed, using defaults:", err);
-    if (titleSubtitle)
-      titleSubtitle.textContent =
-        `analysis failed — using ${devSong.bpm} BPM, click to start`;
+    if (gen !== analysisGen) return;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`failed to load ${label}:`, err);
+    setSubtitle(`failed — drop an mp3 to try again (${msg})`);
   }
 }
 
@@ -297,21 +318,57 @@ titleOverlay?.addEventListener("click", () => {
   if (audioBuffer) startGame();
 });
 
-loadAudio()
-  .then(() => {
-    // Don't overwrite an "analysis failed" message that loadAudio's own
-    // inner catch may have set — only set the happy-path text when
-    // analysis actually succeeded.
-    if (titleSubtitle && songAnalysis !== null) {
-      titleSubtitle.textContent = "click to start";
-    }
-  })
-  .catch((err) => {
-    console.error("audio load failed:", err);
-    if (titleSubtitle)
-      titleSubtitle.textContent =
-        "audio missing — drop an mp3 at public/dev-song.mp3";
+// Page-level defaults: intercept drags anywhere on the window so a
+// misaimed drop doesn't navigate the browser to the file URL. The actual
+// file handling lives on the drop zone below.
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+
+const dropZone = document.getElementById("drop-zone");
+const filePicker = document.getElementById("file-picker") as HTMLInputElement | null;
+
+if (dropZone) {
+  dropZone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropZone.classList.add("drag-over");
   });
+  dropZone.addEventListener("dragleave", () =>
+    dropZone.classList.remove("drag-over"),
+  );
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropZone.classList.remove("drag-over");
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    if (!isAudioFile(file)) {
+      console.warn(`not an audio file: ${file.name} (${file.type})`);
+      return;
+    }
+    void loadAndAnalyzeSource(file, file.name);
+  });
+  dropZone.addEventListener("click", (e) => {
+    e.stopPropagation(); // don't trigger startGame on the title overlay
+    filePicker?.click();
+  });
+}
+
+filePicker?.addEventListener("change", () => {
+  const file = filePicker.files?.[0];
+  if (file) void loadAndAnalyzeSource(file, file.name);
+  filePicker.value = ""; // allow re-selecting the same file
+});
+
+function isAudioFile(f: File): boolean {
+  return (
+    f.type.startsWith("audio/") || /\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(f.name)
+  );
+}
+
+// Auto-load the dev song on boot as a dev convenience. Tests depend on
+// this so __getSongAnalysis() has something to return. Drop a different
+// file to replace.
+void loadAndAnalyzeSource(devSong.url, devSong.url.replace(/^\//, ""));
 
 const tmpLocalPrev = new THREE.Vector3();
 const tmpLocalCurr = new THREE.Vector3();
