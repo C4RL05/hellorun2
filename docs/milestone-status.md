@@ -70,40 +70,46 @@ Determinism: `?seed=N` URL param passes a mulberry32 PRNG to the generator. Test
 
 **Files**: `src/chart.ts`, `src/constants.ts` (BEATS_PER_GATE, GATE_COUNT), `src/scene/gates.ts` (takes `openSlots: readonly number[]`).
 
-## 🟡 M8 — Audio analysis pipeline (in progress)
+## ✅ M8 — Audio analysis pipeline (essentially done)
 
 Plan: BPM + beat grid + section detection. Drop-in audio files.
 
-**Done** (in commit `99a5b32` and later uncommitted work):
+**Done**:
 - ✅ **Essentia.js integration** via Web Worker (analysis off the main thread)
-- ✅ **BPM detection** via `RhythmExtractor2013` (multifeature method) + cross-check with `PercivalBpmEstimator`
-- ✅ **Beat grid** via the `ticks` output (list of per-beat timestamps)
-- ✅ **Grid offset** derived from first beat position; wired into audio-clock math (camera waits through intro silence)
-- ✅ **Sample-rate fix**: resample to 44100 before analysis (was causing 110 vs 120 miscount — see [`gotchas.md`](gotchas.md))
-- ✅ **Consensus heuristic**: if multifeature confidence ≥ 3.0 use it; else check agreement with Percival (direct or harmonic); else use median of `bpmEstimates`
-- ✅ **Drag-drop BYOM UI**: title screen has a drop zone (also click-to-browse). Any dropped audio replaces the current song, re-analyzes. Race-safe via generation counter.
-- ✅ **BPM → FORWARD_SPEED wiring**: `currentForwardSpeed` in `main.ts` is set from `forwardSpeedForBpm(bpm)` after analysis completes, so gates land on the beats of any song. The `FORWARD_SPEED = 10` constant remains as the 120-BPM default (used until analysis lands or if analysis fails). `__getGateTimesMs()` reads the live speed; `collision-check.mjs` awaits analysis before reading to avoid the race.
+- ✅ **BPM detection** via `RhythmExtractor2013` (multifeature) + cross-check with `PercivalBpmEstimator`
+- ✅ **Consensus heuristic**: if multifeature confidence ≥ 3.0 use it; else check agreement with Percival (direct or harmonic); else median of `bpmEstimates`
+- ✅ **Beat grid** via the `ticks` output
+- ✅ **Grid offset**: `OnsetRate` provides a first-onset lower bound; back-extrapolate from `beats[0]` along the BPM grid until the next step would cross below the onset, with a half-beat fallback to the onset itself when the tracker's grid is more than half a beat off (see analyzer-worker `firstGridBeat`). Replaces a custom RMS detector — pure-Essentia path now.
+- ✅ **Sample-rate fix**: resample to 44100 before analysis (see [`gotchas.md`](gotchas.md))
+- ✅ **Drag-drop BYOM UI**: title screen has a drop zone (click-to-browse fallback). Race-safe via generation counter.
+- ✅ **BPM → FORWARD_SPEED wiring**: `currentForwardSpeed = forwardSpeedForBpm(bpm)` after analysis. `__getGateTimesMs()` reads live speed.
+- ✅ **Per-16-beat window features**: `WindowFeature` per 16-beat slice — `loudness` (Essentia Loudness), `centroid` (SpectralCentroidTime), `chroma` (averaged 12-bin HPCP via Windowing → Spectrum → SpectralPeaks → HPCP). 22 windows on a 7-min track at 120 BPM.
+- ✅ **Section detection**: `detectSections(windowFeatures, bpm)` — combined energy+chroma novelty, mean+1σ threshold for boundaries, greedy chunking into runs of {1, 2, 4} windows (= 16/32/64 beats). Then `clusterSections()` first-fit greedy clustering on normalized features (loudness L2 + chroma cosine, threshold 0.4) assigns a `kind` per section. All same-kind sections render in the same waveform color.
+- ✅ **Persistent analysis cache**: `src/audio-analysis/cache.ts` — localStorage keyed by SHA-256 of audio bytes. Skip the worker when re-loading a known song. Versioned key (`hr2-analysis-v1:`) for schema-bump invalidation. "Clear track analysis" button in the dev menu sweeps all versions.
 
-**Deferred / not started**:
-- ❌ **Section detection** — verse/chorus/bridge. Essentia has `SBic` (Bayesian-info-criterion segmentation); plan §9 flagged the library choice as open. Could alternatively use novelty segmentation from spectral flux. Needed for M9 palette shifts and per-section difficulty.
-- ❌ **Confidence threshold UX**: low-confidence analyses should warn the player ("analysis uncertain — sync may feel off"). Currently analysis failures fall back to defaults silently.
+**Deferred**:
+- ❌ **Confidence threshold UX**: warn the player when multifeature confidence < 2.5 ("analysis uncertain — sync may feel off"). Today the low-confidence case falls through silently.
 
-**Files**: `src/audio-analysis/analyzer.ts`, `src/audio-analysis/analyzer-worker.ts`, `src/songs.ts`, `src/main.ts` (loadAndAnalyzeSource flow + drop handlers), `tools/analysis-check.mjs`.
+**Tunables** (live in `src/audio-analysis/analyzer.ts`):
+- `CLUSTER_THRESHOLD = 0.4` — lower → more distinct kinds. Dev-song splits into 2 kinds at 0.4; 4–5 at 0.25.
+- Boundary threshold: `mean + 1σ` of combined novelty inside `detectSections`. Lower constant → more boundaries → more (shorter) sections.
+
+**Files**: `src/audio-analysis/{analyzer,analyzer-worker,cache}.ts`, `src/main.ts` (loadAndAnalyzeSource flow), `src/waveform.ts` (visualization), `tools/analysis-check.mjs` (debugging).
 
 ## 🟡 M9 — Chart generation from audio (partially started)
 
 Plan: sections drive difficulty, beats drive gate placement, section boundaries drive palette shifts.
 
 **Done early** (moved up from M10 because beat-alignment couldn't be finalized without it):
-- ✅ **Rolling corridor generation**: the two-straight stub with wraparound is gone. `src/corridor.ts` now exports `Section` (straight or turn) and `samplePath(sections, s)`; `main.ts` maintains a growing `sections[]` with `ensureSectionsAhead(pathS)` appending straight→turn→straight→turn on demand. Turn direction alternates right/left so the corridor zig-zags rather than closing on itself after 4 right turns. Chart generator is now streamed per-section via `generateChart(GATE_COUNT, { prevEndSlot })`, preserving the corner-continuity rule across section boundaries. `CAMERA_START.z = 0` (no approach) so all straights are uniformly 40 units = 8 beats at the beat-locked forward speed.
+- ✅ **Rolling corridor generation**: `src/corridor.ts` exports `Section` (straight or turn) and `samplePath(sections, s)`; `main.ts` maintains a growing `sections[]` with `ensureSectionsAhead(pathS)` appending straight→turn→straight→turn on demand. Turn direction alternates right/left so the corridor zig-zags. Chart generator is streamed per-corridor-straight via `generateChart(GATE_COUNT, { prevEndSlot })`, preserving corner continuity.
+- ✅ **Section data ready** (M8): `analysis.sections[]` provides the per-block `kind`, `avgLoudness`, `avgCentroid`, `avgChroma`. Everything needed to drive density and palette is now exposed.
 
-**Still pending**:
-- ❌ Song-aware density (denser phrases during high-energy sections)
-- ❌ Palette shifts on section boundaries (plan §5)
-- ❌ Difficulty curve driven by detected song energy
+**Still pending — this is the next session's work**:
+- ❌ **Section→chart density**: read `section.avgLoudness` for the audio block covering each corridor straight, map to `maxDifficulty` (1–4) on the per-section `generateChart(...)` call. Quiet sections → easy; loud sections → hard. Easy lift in `appendSection`.
+- ❌ **Palette shifts on `kind` changes**: tunnel edge color cycles through a palette indexed by `section.kind`. Each new audio-section kind = new corridor color. Closed-barrier red is fixed (plan §5 invariant — don't change).
+- ❌ **Optional refinements**: should `detectSections` also coalesce consecutive same-kind sections into a `musicalSections[]` (the user asked about this and we deferred). Useful if downstream wants "one entry per musical section" rather than fixed-length blocks.
 
-Prerequisites for the remaining work:
-- M8's section detection (blocking)
+Prerequisites are now satisfied — go straight to wiring.
 
 ## ⏳ M10 — Polish (not started)
 

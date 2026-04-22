@@ -11,9 +11,15 @@ Auto-forward first-person rhythm runner. The corridor is built from straights co
 Working through plan §7's 10-milestone sequence. See [`docs/milestone-status.md`](docs/milestone-status.md) for per-milestone detail.
 
 - **Milestones 1–7 complete**: cube-tunnel whitebox, forward motion, player input, gates + collision, 90° turn + second straight, audio-clock-driven pathS, procedural chart generation.
-- **Milestone 8 in progress**: audio analysis via Essentia.js in a Web Worker. BPM + grid-offset detection working, BPM-driven forward speed wired (gates land on beats at any tempo). Drag-drop BYOM UI landed. Section detection still pending.
-- **Milestone 9 partially done ahead of schedule**: rolling corridor generation (section list, `ensureSectionsAhead`, alternating turns, streamed per-section charts with corner continuity). Song-aware density/palette shifts still pending — blocked on M8 section detection.
+- **Milestone 8 essentially done**: Essentia.js worker; BPM + grid-offset detection (with onset-bounded back-extrapolation); BPM-driven forward speed; drag-drop BYOM; per-16-beat window features (loudness/centroid/HPCP chroma); section detection (combined energy+chroma novelty → 16/32/64-beat blocks → first-fit clustering into "kinds"); persistent localStorage analysis cache.
+- **Milestone 9 partially done**: rolling corridor generation (section list, `ensureSectionsAhead`, alternating turns, streamed per-section charts with corner continuity). Section-driven palette shifts and density modulation are the remaining work — analysis side now provides everything needed.
 - **Milestone 10 not started**.
+
+Note on terminology: a "section" in this codebase has two unrelated meanings.
+- **Audio section** (`SongAnalysis.sections[]`): variable-length 16/32/64-beat block of audio with shared features (kind). The thing that drives palette/density.
+- **Corridor section** (`Section` in `corridor.ts`): one straight or one turn span in the rolling-generation list. Pure geometry.
+
+These never overlap conceptually. Don't conflate them.
 
 ## Read these before touching gameplay
 

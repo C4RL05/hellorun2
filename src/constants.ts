@@ -126,28 +126,32 @@ export const TURN_RADIUS = (2 * TURN_ARC_LENGTH) / Math.PI;
 export const BARRIER_OPACITY = 0.5;
 
 // Musical-structure markers. Square borders placed perpendicular to the
-// path at every beat / bar / phrase / section boundary so the player flies
+// path at every beat / bar / phrase / period boundary so the player flies
 // through a visual hierarchy of musical time.
 //
 // 4× nesting both temporally (beats per bar, bars per phrase, …) and
 // visually (each marker is 4× the last). Intervals are BPM-independent in
 // world units — all derived from BEAT_LENGTH above.
+//
+// Note: "period" here is a fixed-cadence visual marker (every 4 phrases =
+// 64 beats), not a game "section". Game sections are variable-length
+// 16-beat-aligned blocks that drive palette/density and live elsewhere.
 export const BEATS_PER_BAR = 4;
 export const BARS_PER_PHRASE = 4;
-export const PHRASES_PER_SECTION = 4;
+export const PHRASES_PER_PERIOD = 4;
 export const BAR_LENGTH = BEAT_LENGTH * BEATS_PER_BAR;
 export const PHRASE_LENGTH = BAR_LENGTH * BARS_PER_PHRASE;
-export const SECTION_MARKER_LENGTH = PHRASE_LENGTH * PHRASES_PER_SECTION;
+export const PERIOD_LENGTH = PHRASE_LENGTH * PHRASES_PER_PERIOD;
 
 export const MARKER_BEAT_SIZE = 1;
 export const MARKER_BAR_SIZE = MARKER_BEAT_SIZE * 4;
 export const MARKER_PHRASE_SIZE = MARKER_BAR_SIZE * 4;
-export const MARKER_SECTION_SIZE = MARKER_PHRASE_SIZE * 4;
+export const MARKER_PERIOD_SIZE = MARKER_PHRASE_SIZE * 4;
 
 export const MARKER_BEAT_COLOR = 0xff0000;
 export const MARKER_BAR_COLOR = 0x00ff00;
 export const MARKER_PHRASE_COLOR = 0x0000ff;
-export const MARKER_SECTION_COLOR = 0xffffff;
+export const MARKER_PERIOD_COLOR = 0xffffff;
 
 // Marker line thickness in CSS pixels (LineSegments2). Thicker than the
 // 2px tunnel edges so the musical-structure grid reads clearly over the

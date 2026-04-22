@@ -24,10 +24,10 @@ import {
   MARKER_BEAT_SIZE,
   MARKER_PHRASE_COLOR,
   MARKER_PHRASE_SIZE,
-  MARKER_SECTION_COLOR,
-  MARKER_SECTION_SIZE,
+  MARKER_PERIOD_COLOR,
+  MARKER_PERIOD_SIZE,
+  PERIOD_LENGTH,
   PHRASE_LENGTH,
-  SECTION_MARKER_LENGTH,
   TURN_ARC_LENGTH,
   TURN_RADIUS,
   forwardSpeedForBpm,
@@ -41,11 +41,18 @@ import {
 import type { Section } from "./corridor";
 import { analyzeAudio } from "./audio-analysis/analyzer";
 import type { SongAnalysis } from "./audio-analysis/analyzer";
+import {
+  clearAnalysisCache,
+  getCachedAnalysis,
+  hashArrayBuffer,
+  setCachedAnalysis,
+} from "./audio-analysis/cache";
 import { generateChart, mulberry32 } from "./chart";
 import { PlayerController } from "./player";
 import { createGates } from "./scene/gates";
 import { createMarker, updateMarkerResolution } from "./scene/markers";
 import { createTunnel } from "./scene/tunnel";
+import { WaveformOverlay } from "./waveform";
 import { devSong } from "./songs";
 
 const canvas = document.createElement("canvas");
@@ -243,9 +250,9 @@ function ensureSectionsAhead(pathS: number): void {
 let nextBeatIdx = 1;
 let nextBarIdx = 1;
 let nextPhraseIdx = 1;
-let nextSectionIdx = 1;
+let nextPeriodIdx = 1;
 
-// All musical-structure markers (beat/bar/phrase/section) are toggleable
+// All musical-structure markers (beat/bar/phrase/period) are toggleable
 // with B and start disabled. They're a debug/playtest aid — the gate
 // cadence already tells the player what the beat is — so they're opt-in.
 let markersVisible = false;
@@ -255,7 +262,7 @@ function placeMarkersUpTo(maxPathS: number): void {
   placeOneKind(maxPathS, BEAT_LENGTH, MARKER_BEAT_SIZE, MARKER_BEAT_COLOR, () => nextBeatIdx, (n) => { nextBeatIdx = n; });
   placeOneKind(maxPathS, BAR_LENGTH, MARKER_BAR_SIZE, MARKER_BAR_COLOR, () => nextBarIdx, (n) => { nextBarIdx = n; });
   placeOneKind(maxPathS, PHRASE_LENGTH, MARKER_PHRASE_SIZE, MARKER_PHRASE_COLOR, () => nextPhraseIdx, (n) => { nextPhraseIdx = n; });
-  placeOneKind(maxPathS, SECTION_MARKER_LENGTH, MARKER_SECTION_SIZE, MARKER_SECTION_COLOR, () => nextSectionIdx, (n) => { nextSectionIdx = n; });
+  placeOneKind(maxPathS, PERIOD_LENGTH, MARKER_PERIOD_SIZE, MARKER_PERIOD_COLOR, () => nextPeriodIdx, (n) => { nextPeriodIdx = n; });
 }
 
 function placeOneKind(
@@ -315,6 +322,8 @@ const debugView = new DebugView(scene, canvas, [], { enabled: devMode });
 ensureSectionsAhead(0);
 placeMarkersUpTo(SECTION_LOOKAHEAD);
 syncResolution();
+
+const waveform = new WaveformOverlay({ onSeek: seekToSongTime });
 
 let dead = false;
 let pathS = 0;
@@ -395,38 +404,54 @@ async function loadAndAnalyzeSource(
         : await (await fetch(source)).arrayBuffer();
     if (gen !== analysisGen) return;
 
+    // Hash before decode — decodeAudioData detaches the ArrayBuffer in
+    // Chromium, after which the bytes are unreadable.
+    const hash = await hashArrayBuffer(arr);
+    if (gen !== analysisGen) return;
+    const cached = getCachedAnalysis(hash);
+
     // Tear down any prior audio source playing the old buffer, so the
     // replacement isn't mixed with leftover audio.
     stopAudio();
     audioBuffer = await audioCtx.decodeAudioData(arr);
     if (gen !== analysisGen) return;
+    waveform.setAudioBuffer(audioBuffer);
     songAnalysis = null;
 
-    // The worker's beat-detection and tempo-verification steps are single
-    // synchronous WASM calls that can run for tens of seconds; no progress
-    // messages fire during them. Tick elapsed time on the main thread so
-    // the subtitle keeps moving even while the worker is WASM-bound.
-    const analysisStart = performance.now();
-    let stage = "starting";
-    const renderTick = () => {
-      const elapsed = Math.round((performance.now() - analysisStart) / 1000);
-      setSubtitle(`analyzing audio — ${stage} (${elapsed}s)`);
-    };
-    renderTick();
-    const tickInterval = setInterval(renderTick, 250);
-    let result;
-    try {
-      result = await analyzeAudio(audioBuffer, (p) => {
-        stage = STAGE_LABELS[p.stage] ?? p.stage;
-        renderTick();
-      });
-    } finally {
-      clearInterval(tickInterval);
+    let result: SongAnalysis;
+    if (cached) {
+      console.log(`analysis cache hit for ${label} (${hash.slice(0, 8)}…)`);
+      setSubtitle("loaded from cache");
+      result = cached;
+    } else {
+      // The worker's beat-detection and tempo-verification steps are single
+      // synchronous WASM calls that can run for tens of seconds; no progress
+      // messages fire during them. Tick elapsed time on the main thread so
+      // the subtitle keeps moving even while the worker is WASM-bound.
+      const analysisStart = performance.now();
+      let stage = "starting";
+      const renderTick = () => {
+        const elapsed = Math.round((performance.now() - analysisStart) / 1000);
+        setSubtitle(`analyzing audio — ${stage} (${elapsed}s)`);
+      };
+      renderTick();
+      const tickInterval = setInterval(renderTick, 250);
+      try {
+        result = await analyzeAudio(audioBuffer, (p) => {
+          stage = STAGE_LABELS[p.stage] ?? p.stage;
+          renderTick();
+        });
+      } finally {
+        clearInterval(tickInterval);
+      }
+      if (gen !== analysisGen) return;
+      setCachedAnalysis(hash, result);
     }
     if (gen !== analysisGen) return;
     songAnalysis = result;
     currentGridOffsetSec = result.gridOffsetSec;
     currentForwardSpeed = forwardSpeedForBpm(result.bpm);
+    waveform.setSongStructure(result.bpm, result.gridOffsetSec, result.sections);
     console.log(
       `analyzed ${label}: bpm=${result.bpm.toFixed(2)}, ` +
         `forwardSpeed=${currentForwardSpeed.toFixed(2)} u/s, ` +
@@ -465,6 +490,16 @@ function getAudioNow(): number | null {
   if (!audioCtx || !audioSource) return null;
   if (audioCtx.state !== "running") return null;
   return audioCtx.currentTime - audioStartTime - currentGridOffsetSec;
+}
+
+// Raw playback position in seconds from sample 0 of the audio file.
+// Used for the waveform playhead. While paused, returns the saved offset.
+// While not playing (title screen, dead, no audio loaded), returns 0.
+function getSongTimeSec(): number {
+  if (paused) return pauseOffsetSec;
+  if (!audioCtx || !audioSource) return 0;
+  if (audioCtx.state !== "running") return 0;
+  return Math.max(0, audioCtx.currentTime - audioStartTime);
 }
 
 function stopAudio(): void {
@@ -527,6 +562,56 @@ function togglePause(): void {
 titleOverlay?.addEventListener("click", () => {
   if (audioBuffer) startGame();
 });
+
+// Dev menu (Tab toggle, dev-mode-only). Placeholder action for now —
+// later this'll host runtime tunables (cluster threshold, marker sizes,
+// section probes, etc).
+const devMenu = document.getElementById("dev-menu");
+function toggleDevMenu(): void {
+  devMenu?.classList.toggle("hidden");
+}
+document.getElementById("dev-clear-cache")?.addEventListener("click", () => {
+  const removed = clearAnalysisCache();
+  console.log(`cleared ${removed} cached analysis entr${removed === 1 ? "y" : "ies"}`);
+});
+
+// Click-on-waveform handler. Maps the click x to a song time, then jumps
+// pathS, restarts audio from that offset, and forces play state — works
+// the same regardless of whether the game was on title, running, paused,
+// or dead. The click itself is a user gesture so audioCtx.resume()
+// succeeds even from the title screen.
+function seekToSongTime(songTimeSec: number): void {
+  if (!audioCtx || !audioBuffer) return;
+  const audioNow = songTimeSec - currentGridOffsetSec;
+  pathS = Math.max(0, audioNow * currentForwardSpeed);
+  ensureSectionsAhead(pathS);
+  placeMarkersUpTo(pathS + SECTION_LOOKAHEAD);
+
+  // Snap camera to the new pose. prevWorldPos must update too — without
+  // this the next frame's collision check would Z-cross every gate plane
+  // between old position and new, triggering a false hit.
+  const pose = samplePath(sections, pathS);
+  camera.position.set(pose.pos.x, pose.pos.y, pose.pos.z);
+  camera.rotation.y = pose.yaw;
+  prevWorldPos.copy(camera.position);
+
+  stopAudio();
+  void audioCtx.resume();
+  audioSource = audioCtx.createBufferSource();
+  audioSource.buffer = audioBuffer;
+  audioSource.connect(audioCtx.destination);
+  audioSource.onended = () => {
+    running = false;
+  };
+  audioStartTime = audioCtx.currentTime - songTimeSec;
+  audioSource.start(0, songTimeSec);
+
+  paused = false;
+  pauseHadAudio = true;
+  dead = false;
+  running = true;
+  titleOverlay?.classList.add("hidden");
+}
 
 // Page-level defaults: intercept drags anywhere on the window so a
 // misaimed drop doesn't navigate the browser to the file URL. The actual
@@ -696,6 +781,7 @@ renderer.setAnimationLoop(() => {
   }
 
   debugView.updatePlayerBox(camera.position);
+  waveform.draw(getSongTimeSec());
 
   // Main render: full-viewport game view, clearing both color and depth.
   renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
@@ -716,8 +802,8 @@ window.addEventListener("keydown", (e) => {
   // Core gameplay keys — always available.
   if (e.code === "KeyR") respawn();
   else if (e.code === "Escape") quitToTitle();
-  // Dev-only: Space pause, B marker toggle, I invincibility. M (debug
-  // overlay) is gated inside DebugView via its `enabled` option.
+  // Dev-only: Space pause, B marker toggle, I invincibility, Tab dev menu.
+  // M (debug overlay) is gated inside DebugView via its `enabled` option.
   else if (devMode && e.code === "Space") {
     e.preventDefault(); // don't scroll the page
     togglePause();
@@ -726,6 +812,9 @@ window.addEventListener("keydown", (e) => {
   } else if (devMode && e.code === "KeyI") {
     invincible = !invincible;
     console.log(`invincibility: ${invincible ? "ON" : "OFF"}`);
+  } else if (devMode && e.code === "Tab") {
+    e.preventDefault(); // don't shift focus
+    toggleDevMenu();
   }
 });
 

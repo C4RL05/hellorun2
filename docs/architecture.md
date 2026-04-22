@@ -8,18 +8,21 @@ Code layout and how the systems fit together. Read alongside [`hellorun2-plan.md
 src/
 ├── main.ts                      — entry point: renderer, scene, game loop, UI wiring
 ├── constants.ts                 — feel-spec (plan §8): every tunable number
-├── corridor.ts                  — parametric path (pathS → world pose)
+├── corridor.ts                  — parametric path (pathS → world pose) + Section type
 ├── chart.ts                     — procedural chart generator (phrases, corner continuity)
 ├── collision.ts                 — Z-crossing collision math (slotForY, checkCollision)
 ├── player.ts                    — PlayerController: input → inputTarget → inputNow → camera.y
 ├── debug-view.ts                — top-down overlay: bboxes on layer 1, ortho camera
+├── waveform.ts                  — 2D-canvas waveform overlay (top of screen)
 ├── songs.ts                     — SongMetadata type + devSong default
 ├── audio-analysis/
-│   ├── analyzer.ts              — main-thread API: spawn worker, resample, transfer buffer
-│   └── analyzer-worker.ts       — Web Worker: Essentia.js RhythmExtractor2013 + Percival
+│   ├── analyzer.ts              — main-thread API + Section type + detectSections + clusterSections
+│   ├── analyzer-worker.ts       — Web Worker: BPM/grid + per-window Loudness/Centroid/HPCP chroma
+│   └── cache.ts                 — localStorage analysis cache (SHA-256 keyed)
 └── scene/
     ├── tunnel.ts                — cube-grid tunnel (merged geometry, per-cube jitter rotation)
-    └── gates.ts                 — 3-slot barriers + per-barrier metadata
+    ├── gates.ts                 — 3-slot barriers + per-barrier metadata
+    └── markers.ts               — beat/bar/phrase/period fly-through square markers
 ```
 
 ## Corridor path model
@@ -101,34 +104,77 @@ Each straight group is built from identical `createTunnel()` + `createGates(slot
 ## Audio pipeline
 
 ```
-fetch(url) ──────────►  ArrayBuffer
-                         │
-                         ▼
-                    decodeAudioData (Web Audio, native sample rate)
-                         │
-                         ▼
-                    resampleBuffer → 44100 Hz (required by Essentia.js)
-                         │
-                         ▼
-                    mixToMono (Float32Array)
-                         │
-                         ├──► Worker: RhythmExtractor2013 + PercivalBpmEstimator
-                         │          │
-                         │          ▼
-                         │       SongAnalysis { bpm, beats[], gridOffsetSec, confidence, … }
-                         │
-                         ▼
-                    (original AudioBuffer retained for playback; resampled buffer is analysis-only)
-                         │
-                         ▼
-                    click → startAudio() → BufferSourceNode at native rate
+fetch(url) / file.arrayBuffer ──►  ArrayBuffer
+                                    │
+                                    ├──► hashArrayBuffer (SHA-256)
+                                    │       │
+                                    │       └──► getCachedAnalysis ──┐
+                                    │                                │
+                                    ▼                                │
+                              decodeAudioData                        │
+                              (native sample rate)                   │
+                                    │                                │
+                                    ▼                                │
+                              waveform.setAudioBuffer                │
+                                    │                                │
+                                    ▼                                │
+                              cache hit? ─yes─► use cached ─────────►│
+                                    │                                │
+                                    no                               │
+                                    ▼                                │
+                              resampleBuffer → 44100 Hz              │
+                                    │                                │
+                                    ▼                                │
+                              mixToMono (Float32Array)               │
+                                    │                                │
+                              Worker pipeline:                       │
+                              1. RhythmExtractor2013 → bpm, ticks    │
+                              2. PercivalBpmEstimator → cross-check  │
+                              3. OnsetRate → first onset (lower bound)
+                              4. Per-16-beat window features:        │
+                                 Loudness + SpectralCentroidTime +   │
+                                 (Windowing → Spectrum → SpectralPeaks → HPCP) avg
+                                    │                                │
+                                    ▼                                │
+                              SongAnalysis { bpm, beats[],           │
+                                gridOffsetSec, confidence,           │
+                                windowFeatures[], … }                │
+                                    │                                │
+                              setCachedAnalysis(hash, result)        │
+                                    │                                │
+                                    ▼ ◄──────────────────────────────┘
+                              detectSections(windowFeatures, bpm)
+                              (main thread, pure function)
+                                    │
+                              clusterSections → kinds
+                                    │
+                                    ▼
+                              SongAnalysis.sections[]
+                                    │
+                                    ▼
+                              waveform.setSongStructure(bpm, gridOffsetSec, sections)
+                              currentForwardSpeed = forwardSpeedForBpm(bpm)
+                                    │
+                                    ▼
+                              click to start → startAudio()
 ```
 
 - `main.ts` holds `audioCtx`, `audioBuffer` (native rate), `audioSource` (current playback node), `audioStartTime`, `currentGridOffsetSec`.
 - **Audio clock** drives pathS in real play: `audioNow = audioCtx.currentTime − audioStartTime − gridOffsetSec`, `pathS = max(0, audioNow × currentForwardSpeed)`. During intro (negative audioNow) pathS is clamped to 0 — camera waits at spawn through silence. `currentForwardSpeed = forwardSpeedForBpm(bpm)` after analysis; default `FORWARD_SPEED` before.
 - **Wall-clock fallback**: when no audio playing (tests), `pathS += currentForwardSpeed × motionScale × dt`. Tests set `motionScale=0` to freeze.
+- **Pause/unpause** (Space, dev-mode-only): on pause, snapshot `audioCtx.currentTime − audioStartTime` as `pauseOffsetSec` and stop the source. On unpause, create a fresh BufferSourceNode and call `.start(0, pauseOffsetSec)` with `audioStartTime` realigned so getAudioNow continues seamlessly. Beat sync survives any number of cycles because the offset comes from the audio context's sample clock.
+- **Click-to-seek on waveform**: same restart-with-offset mechanism as unpause, plus `pathS = (songTime − gridOffsetSec) × forwardSpeed` and `prevWorldPos.copy(camera.position)` to prevent a fake long-distance Z-crossing collision. Always sets `running=true, dead=false, paused=false` — clicking the waveform means "play from here" regardless of prior state.
 - **Drag-drop**: drop-zone handler calls `loadAndAnalyzeSource(file, file.name)` → same analyzer path as the auto-load. Generation counter (`analysisGen`) ensures racing loads don't clobber each other.
 - **Autoplay policy**: `startAudio()` is called synchronously inside a click handler so Chromium accepts the gesture. AudioContext is `.resume()`-ed inside the same call chain.
+
+### Section detection (`src/audio-analysis/analyzer.ts`)
+
+Pure-JS post-processing on the worker's `windowFeatures[]`. Two passes:
+
+1. **`detectSections(windowFeatures, bpm)`** — for each adjacent pair of windows, compute a combined novelty (0.5 × normalized energy L2 + 0.5 × chroma cosine distance). Boundaries are placed where novelty exceeds `mean + 1σ`. Each between-boundary run is then chunked greedily into blocks of {4, 2, 1} windows = {64, 32, 16} beats. Aggregates loudness/centroid/chroma per block. Emits `Section[]`.
+2. **`clusterSections(drafts)`** — first-fit greedy clustering. Walk sections in order; each one either joins an existing cluster whose representative is within `CLUSTER_THRESHOLD = 0.4` (combined energy L2 + chroma cosine) or seeds a new cluster. Cluster representatives update by running average. Returns `kind` per section.
+
+Tunables that change boundary granularity vs cluster granularity are independent: lowering the novelty threshold gives more (shorter) sections; lowering the cluster threshold gives more distinct kinds among the same set of sections.
 
 ## Debug overlay (`src/debug-view.ts`)
 
@@ -156,6 +202,32 @@ Interactions (all gated on `active`):
 - right-mouse drag → pans `orthoCamera.position.x/z` (calls `stopPropagation` on mousemove so PlayerController doesn't see the drag)
 
 Bboxes are registered incrementally via `debugView.addBboxes(...)` — each new straight calls it as it's appended. Player bbox mutates its `Box3.min/max` each frame (Box3Helper picks that up via its `updateMatrixWorld`). Per-cube OBB lines were dropped when the corridor went rolling — they would have needed re-merging each time a section was appended, not worth the complexity for a debug visual.
+
+## Waveform overlay (`src/waveform.ts`)
+
+Top-of-screen 2D-canvas overlay (separate `<canvas>` from the WebGL one). Renders the audio buffer once into an offscreen cache, then per frame `drawImage`s the cache + a 2px playhead line. Decoupled from the three.js render loop.
+
+Cache contents (rebuilt on `setAudioBuffer` and on resize):
+- Per-pixel-column min/max amplitude bars, colored by section.
+- Phrase grid (every 16 beats from `gridOffsetSec`): solid white where a section starts, dotted 50% otherwise.
+
+Section colors are hue-spread evenly across a heatmap gradient (blue 240° → red 0°) by `kind` index, all sections of the same kind painting identical. `WAVEFORM_ALPHA = 0.5` for the bars; full opacity for section-boundary lines.
+
+Click-to-seek is enabled when the host passes `onSeek` to the constructor; the canvas raises its z-index above the title overlay (5 → 15) and converts click x to song time. Wired in `main.ts` to `seekToSongTime(songTimeSec)`.
+
+## Dev mode (`devMode` in `main.ts`)
+
+`devMode = import.meta.env.DEV || urlParams.has("dev")` — always true in `npm run dev`, opt-in via `?dev` for production builds. Gates these keyboard shortcuts (core game keys R / Esc stay always-available):
+
+| Key | Action |
+|---|---|
+| Space | Pause/unpause (sample-accurate beat sync via audio context clock) |
+| B | Toggle markers (beat/bar/phrase/period squares) |
+| M | Toggle debug overlay (top-down) — gated inside `DebugView` via its `enabled` option |
+| I | Toggle invincibility (skip collision checks) |
+| Tab | Toggle dev menu modal (`#dev-menu` overlay) |
+
+The dev menu modal hosts buttons for runtime ops; current entry is "clear track analysis" which calls `clearAnalysisCache()`.
 
 ## Collision (`src/collision.ts`)
 

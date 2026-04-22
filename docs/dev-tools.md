@@ -38,7 +38,28 @@ node tools/debug-view-check.mjs
 Append to `http://localhost:5173/?...`:
 
 - `?seed=N` — Seeds the chart generator's PRNG (mulberry32) with integer N. Deterministic charts for reproducible runs. `tools/collision-check.mjs` uses `?seed=1` so it gets a chart with a lethal gate regardless of today's `Math.random()` roll.
-- `?dev` — Enables developer-mode shortcuts in a production build: Space (pause/unpause), B (marker toggle), M (debug overlay), I (invincibility). Always-on in `npm run dev` builds via `import.meta.env.DEV`. Core gameplay keys (R = respawn, Esc = quit to title) stay available regardless.
+- `?dev` — Enables developer-mode shortcuts in a production build (always on in `npm run dev`). Core gameplay keys (R = respawn, Esc = quit to title) stay available regardless.
+
+## Keyboard shortcuts
+
+| Key | Mode | Action |
+|---|---|---|
+| R | always | Respawn (resetToSpawn + restart audio) |
+| Esc | always | Quit to title |
+| Space | dev | Pause / unpause (sample-accurate beat sync preserved across cycles) |
+| B | dev | Toggle markers (beat / bar / phrase / period squares) |
+| M | dev | Toggle debug overlay (top-down ortho view) |
+| I | dev | Toggle invincibility |
+| Tab | dev | Toggle dev menu modal |
+
+## Dev menu
+
+Tab-toggled modal overlay. Currently hosts:
+- **Clear track analysis** — calls `clearAnalysisCache()`, sweeps every `hr2-analysis-v*` key from localStorage. Next page load re-analyzes from scratch.
+
+## Analysis cache
+
+Persistent localStorage cache keyed by SHA-256 of audio bytes (versioned prefix `hr2-analysis-v1:`). Skips the ~15s Essentia worker when re-loading a known song. Hash-keyed (not URL-keyed) so swapping `dev-song.mp3` content auto-invalidates. Bump `CACHE_VERSION` in `src/audio-analysis/cache.ts` when changing the analyzer worker output shape or section detection logic.
 
 ## Dev hooks (`window.__*`)
 
