@@ -22,7 +22,7 @@ export interface SongMetadata {
 // values below to match the actual track — 120 BPM + no offset is a
 // placeholder that won't align with an arbitrary file.
 export const devSong: SongMetadata = {
-  url: "/dev-song.mp3",
+  url: "/dev-120.mp3",
   bpm: 120,
   gridOffsetSec: 0,
 };

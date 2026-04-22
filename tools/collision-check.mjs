@@ -1,7 +1,9 @@
-// Verifies milestone 4's collision pipeline end-to-end. The hardcoded chart's
-// gate 1 (second gate, z=-7.5) is slot 2 (top); the player spawns at slot 1
-// (mid), so with no input the camera should die crossing gate 1 at ~0.95s.
-// Then respawn + steering to the correct slot should survive.
+// Verifies milestone 4+7's collision pipeline end-to-end against whatever
+// chart the generator produces this page load. Finds the first non-spawn-
+// safe gate (slot != 1), then:
+//   A) coast past it → expect dead
+//   B) respawn, coast through the prior gate, steer into the right slot →
+//      expect alive
 //
 // Usage: ensure `npm run dev` is running, then `node tools/collision-check.mjs`.
 
@@ -15,39 +17,61 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 try {
   await page.goto(URL, { waitUntil: "networkidle", timeout: 15_000 });
   await page.waitForSelector("canvas");
-  await page.waitForFunction(() => window.__isDead !== undefined, {
+  await page.waitForFunction(() => window.__getChart !== undefined, {
     timeout: 5_000,
   });
 
-  // Dismiss the title overlay and enable motion so the camera actually
-  // advances through the corridor.
+  // Dismiss the title overlay and enable motion.
   await page.evaluate(() => window.__startGame());
 
-  // Scenario 1: no steering, expect death around gate 1 (~0.95s).
+  const chart = await page.evaluate(() => window.__getChart());
+  const gateMsList = await page.evaluate(() => window.__getGateTimesMs());
+  const gateMs = (i) => gateMsList[i];
+  let firstLethal = -1;
+  for (let i = 0; i < chart.length; i++) {
+    if (chart[i] !== 1) {
+      firstLethal = i;
+      break;
+    }
+  }
+  if (firstLethal < 1) {
+    console.log(
+      `Chart has no non-mid gates at i>=1 (chart=${chart.join(",")}); can't run.`,
+    );
+    process.exit(1);
+  }
+  const lethalSlot = chart[firstLethal];
+  const steerKey = lethalSlot === 2 ? "ArrowUp" : "ArrowDown";
+  console.log(
+    `Chart=[${chart.join(",")}] firstLethal=gate${firstLethal} slot=${lethalSlot} steer=${steerKey}`,
+  );
+
+  // Scenario A: no steering, expect death at or before firstLethal gate.
   await page.evaluate(() => window.__respawn());
-  await page.waitForTimeout(1_400);
+  await page.waitForTimeout(gateMs(firstLethal) + 200);
   const diedPassively = await page.evaluate(() => window.__isDead());
-  const yAtDeath = await page.evaluate(() => window.__camera.position.y);
   const zAtDeath = await page.evaluate(() => window.__camera.position.z);
 
-  // Scenario 2: respawn, coast through gate 0 (slot 1 = spawn-safe), then
-  // press ArrowUp to reach slot 2 before gate 1 at z=-7.5 / t=0.95s.
+  // Scenario B: coast past (firstLethal - 1), steer to lethalSlot before
+  // gate `firstLethal`, expect alive.
   await page.evaluate(() => window.__respawn());
-  await page.waitForTimeout(600); // coast past gate 0 at t=0.45s
-  await page.keyboard.down("ArrowUp");
-  await page.waitForTimeout(500); // steering window: up to slot 2 before gate 1
+  const coastMs = Math.max(50, gateMs(firstLethal - 1) + 50);
+  await page.waitForTimeout(coastMs);
+  await page.keyboard.down(steerKey);
+  // Need enough time for: input ease-up to clamp (~300ms) + passing the
+  // gate. Total absolute time is gateMs(firstLethal) + a little buffer.
+  const remainingMs = gateMs(firstLethal) - coastMs + 250;
+  await page.waitForTimeout(remainingMs);
   const survivedWithInput = !(await page.evaluate(() => window.__isDead()));
   const zAfterSurvive = await page.evaluate(() => window.__camera.position.z);
-  await page.keyboard.up("ArrowUp");
+  await page.keyboard.up(steerKey);
 
   console.log("Scenario A — spawn and coast (no input):");
+  console.log(`  died: ${diedPassively}, z=${zAtDeath.toFixed(2)}`);
   console.log(
-    `  died: ${diedPassively}, y=${yAtDeath.toFixed(3)}, z=${zAtDeath.toFixed(2)}`,
+    `Scenario B — spawn, coast, steer ${steerKey} to slot ${lethalSlot}:`,
   );
-  console.log("Scenario B — spawn and hold ArrowUp to slot 2:");
-  console.log(
-    `  alive past gate 1: ${survivedWithInput}, z=${zAfterSurvive.toFixed(2)}`,
-  );
+  console.log(`  alive past gate ${firstLethal}: ${survivedWithInput}, z=${zAfterSurvive.toFixed(2)}`);
 
   const verdictA = diedPassively ? "DEATH DETECTED" : "SHOULD HAVE DIED";
   const verdictB = survivedWithInput

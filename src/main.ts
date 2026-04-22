@@ -10,16 +10,25 @@ import {
   CAMERA_FAR,
   CAMERA_FOV,
   CAMERA_NEAR,
+  CAMERA_START,
   CELL,
   COLOR_BACKGROUND,
+  FIRST_GATE_Z,
   FORWARD_SPEED,
+  GATE_COUNT,
+  GATE_SPACING,
+  TURN_ARC_LENGTH,
 } from "./constants";
 import {
   PATH_TOTAL,
+  STRAIGHT_LENGTH,
   samplePath,
   STRAIGHT2_POS,
   STRAIGHT2_YAW,
 } from "./corridor";
+import { analyzeAudio } from "./audio-analysis/analyzer";
+import type { SongAnalysis } from "./audio-analysis/analyzer";
+import { generateChart, mulberry32 } from "./chart";
 import { PlayerController } from "./player";
 import { createGates } from "./scene/gates";
 import { createTunnel } from "./scene/tunnel";
@@ -59,9 +68,12 @@ interface Straight {
   readonly cubeTransforms: readonly THREE.Matrix4[];
 }
 
-function buildStraight(name: string): Straight {
+function buildStraight(
+  name: string,
+  openSlots: readonly number[],
+): Straight {
   const tunnel = createTunnel();
-  const gates = createGates();
+  const gates = createGates(openSlots);
   edgeMaterials.push(tunnel.edgeMaterial, gates.edgeMaterial);
   const group = new THREE.Group();
   group.name = name;
@@ -75,10 +87,21 @@ function buildStraight(name: string): Straight {
   };
 }
 
-const straight1 = buildStraight("straight1");
+// Procedural chart (plan §7 M7): 16 gates across both straights. Seed
+// from URL (?seed=N) for deterministic playtests; otherwise Math.random
+// for a fresh chart each page load.
+const seedParam = new URL(window.location.href).searchParams.get("seed");
+const chartRand =
+  seedParam !== null ? mulberry32(parseInt(seedParam, 10) || 0) : Math.random;
+const chart = generateChart(GATE_COUNT * 2, { rand: chartRand });
+
+const straight1 = buildStraight("straight1", chart.slice(0, GATE_COUNT));
 scene.add(straight1.group);
 
-const straight2 = buildStraight("straight2");
+const straight2 = buildStraight(
+  "straight2",
+  chart.slice(GATE_COUNT, GATE_COUNT * 2),
+);
 straight2.group.position.copy(STRAIGHT2_POS);
 straight2.group.rotation.y = STRAIGHT2_YAW;
 scene.add(straight2.group);
@@ -179,6 +202,12 @@ let audioSource: AudioBufferSourceNode | null = null;
 // Subtracting this (and gridOffsetSec) from audioCtx.currentTime gives
 // "audio time since beat 1" — the master clock for pathS.
 let audioStartTime = 0;
+// Filled by the analyzer worker after decode. gridOffsetSec is the only
+// analyzed field that feeds back into runtime behavior right now — it
+// aligns the audio-clock math so pathS=0 coincides with beat 1 of the
+// song. bpm and beats[] are exposed via songAnalysis for M9 wiring.
+let currentGridOffsetSec = devSong.gridOffsetSec;
+let songAnalysis: SongAnalysis | null = null;
 
 const titleOverlay = document.getElementById("title-screen");
 const titleSubtitle = titleOverlay?.querySelector(".subtitle") as
@@ -191,6 +220,30 @@ async function loadAudio(): Promise<void> {
   if (!res.ok) throw new Error(`audio fetch failed (${res.status})`);
   const arr = await res.arrayBuffer();
   audioBuffer = await audioCtx.decodeAudioData(arr);
+
+  if (titleSubtitle) titleSubtitle.textContent = "analyzing audio…";
+  try {
+    songAnalysis = await analyzeAudio(audioBuffer, (p) => {
+      if (titleSubtitle) {
+        titleSubtitle.textContent = `analyzing audio: ${Math.round(p.progress * 100)}%`;
+      }
+    });
+    currentGridOffsetSec = songAnalysis.gridOffsetSec;
+    console.log(
+      `analyzed: bpm=${songAnalysis.bpm.toFixed(2)}, ` +
+        `gridOffsetSec=${songAnalysis.gridOffsetSec.toFixed(3)}, ` +
+        `confidence=${songAnalysis.confidence.toFixed(2)}, ` +
+        `beats=${songAnalysis.beats.length}`,
+    );
+  } catch (err) {
+    // Analysis failure falls back to devSong defaults. Game still runs —
+    // just at the hardcoded BPM/offset. Worth surfacing to the user so
+    // they know why sync might feel off.
+    console.error("analysis failed, using defaults:", err);
+    if (titleSubtitle)
+      titleSubtitle.textContent =
+        `analysis failed — using ${devSong.bpm} BPM, click to start`;
+  }
 }
 
 function startAudio(): void {
@@ -209,12 +262,12 @@ function startAudio(): void {
 }
 
 // Seconds since beat 1 of the song (negative during the intro if
-// gridOffsetSec > 0). Returns null if no audio is actively playing —
-// callers should fall back to wall-clock advance in that case.
+// currentGridOffsetSec > 0). Returns null if no audio is actively playing
+// — callers should fall back to wall-clock advance in that case.
 function getAudioNow(): number | null {
   if (!audioCtx || !audioSource) return null;
   if (audioCtx.state !== "running") return null;
-  return audioCtx.currentTime - audioStartTime - devSong.gridOffsetSec;
+  return audioCtx.currentTime - audioStartTime - currentGridOffsetSec;
 }
 
 function stopAudio(): void {
@@ -246,7 +299,12 @@ titleOverlay?.addEventListener("click", () => {
 
 loadAudio()
   .then(() => {
-    if (titleSubtitle) titleSubtitle.textContent = "click to start";
+    // Don't overwrite an "analysis failed" message that loadAudio's own
+    // inner catch may have set — only set the happy-path text when
+    // analysis actually succeeded.
+    if (titleSubtitle && songAnalysis !== null) {
+      titleSubtitle.textContent = "click to start";
+    }
   })
   .catch((err) => {
     console.error("audio load failed:", err);
@@ -311,6 +369,15 @@ const respawn = () => {
   }
   running = true;
   titleOverlay?.classList.add("hidden");
+};
+
+// Quit back to the title screen: stop the song and put game state in the
+// same shape as initial page load. Next click resumes the start-flow.
+const quitToTitle = () => {
+  stopAudio();
+  running = false;
+  resetToSpawn();
+  titleOverlay?.classList.remove("hidden");
 };
 
 // Seed initial pose before the first frame.
@@ -379,6 +446,7 @@ renderer.setAnimationLoop(() => {
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR") respawn();
+  else if (e.code === "Escape") quitToTitle();
   else if (e.code === "KeyI") {
     invincible = !invincible;
     console.log(`invincibility: ${invincible ? "ON" : "OFF"}`);
@@ -419,9 +487,32 @@ if (import.meta.env.DEV) {
   w.__getPathS = () => pathS;
   w.__setPathS = (s) => {
     pathS = s;
+    totalPathS = s;
   };
   w.__startGame = () => {
     running = true;
     titleOverlay?.classList.add("hidden");
+  };
+  (w as unknown as { __getChart: () => number[] }).__getChart = () => [...chart];
+  (w as unknown as {
+    __getSongAnalysis: () => SongAnalysis | null;
+  }).__getSongAnalysis = () => songAnalysis;
+  // Test-only: returns arrival time (in ms, wall-clock at FORWARD_SPEED)
+  // for each gate in chart order. Straight 1 gates first, then straight 2.
+  // Derived from current constants so tests don't drift when GATE_COUNT or
+  // BEATS_PER_GATE changes.
+  (w as unknown as { __getGateTimesMs: () => number[] }).__getGateTimesMs = () => {
+    const times: number[] = [];
+    for (let i = 0; i < GATE_COUNT; i++) {
+      const pathAtGate = CAMERA_START.z - (FIRST_GATE_Z - i * GATE_SPACING);
+      times.push(Math.round((pathAtGate / FORWARD_SPEED) * 1000));
+    }
+    for (let i = 0; i < GATE_COUNT; i++) {
+      const localPathAtGate =
+        CAMERA_START.z - (FIRST_GATE_Z - i * GATE_SPACING);
+      const fullPathS = STRAIGHT_LENGTH + TURN_ARC_LENGTH + localPathAtGate;
+      times.push(Math.round((fullPathS / FORWARD_SPEED) * 1000));
+    }
+    return times;
   };
 }

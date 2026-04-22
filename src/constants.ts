@@ -64,19 +64,22 @@ export const CUBE_JITTER_DEG = 10;
 // screen-space triangle-strip lines instead.
 export const EDGE_WIDTH_PX = 2;
 
-// Gates (plan §2, milestone 4).
-// "Two bars = one straight. Fixed number of gates per straight, one gate per
-// beat." In 4/4 that's 8 gates per straight.
-export const GATE_COUNT = 8;
+// Gates (plan §2, milestones 4 and 7).
+// Plan §2 says "two bars = one straight" — at 4/4, that's 8 beats. Plan
+// originally prescribed one gate per beat; BEATS_PER_GATE lets us make
+// the chart sparser for easier feel or denser for tighter sections.
+// Must divide BEATS_PER_STRAIGHT evenly. At BEATS_PER_GATE=4 the player
+// sees a gate every 2s at 120 BPM — plenty of breathing room.
+//
+// Wiring per-straight density (calm sections sparse, drops dense) is a
+// M8/M9 job once audio-section boundaries exist; for now this is global.
+export const BEATS_PER_STRAIGHT = 8;
+export const BEATS_PER_GATE = 4;
+export const GATE_COUNT = BEATS_PER_STRAIGHT / BEATS_PER_GATE;
 export const GATE_SPACING = (TUNNEL_DEPTH * CELL) / GATE_COUNT;
 export const FIRST_GATE_Z = -GATE_SPACING * 0.5;
 export const GATE_THICKNESS = 0.15;
 export const SLOT_COUNT = 3;
-
-// Gate open-slot pattern (0=bottom, 1=mid, 2=top). Hardcoded chart per plan
-// §7 milestone 6 — procedural generation comes later. First gate is mid so
-// the spawn position (y=0) is safe; the rest force vertical movement.
-export const GATE_OPEN_SLOTS = [1, 2, 0, 1, 2, 0, 1, 2];
 
 // Plan §5: closed-barrier color is fixed (red or amber) regardless of scene
 // palette. Danger must mean the same thing visually in every section.

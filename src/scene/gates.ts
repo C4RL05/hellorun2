@@ -12,7 +12,6 @@ import {
   EDGE_WIDTH_PX,
   FIRST_GATE_Z,
   GATE_COUNT,
-  GATE_OPEN_SLOTS,
   GATE_SPACING,
   GATE_THICKNESS,
   SLOT_COUNT,
@@ -32,8 +31,14 @@ export interface GatesScene {
 
 // Builds all gates for the straight as a single merged mesh + fat-line
 // edges. Each gate is SLOT_COUNT slots stacked vertically, with the open
-// slot simply omitted from the merge (no barrier there).
-export function createGates(): GatesScene {
+// slot simply omitted from the merge (no barrier there). `openSlots[i]`
+// is the open slot for gate i; length must equal GATE_COUNT.
+export function createGates(openSlots: readonly number[]): GatesScene {
+  if (openSlots.length !== GATE_COUNT) {
+    throw new Error(
+      `createGates: openSlots length ${openSlots.length} !== GATE_COUNT ${GATE_COUNT}`,
+    );
+  }
   const data: Gate[] = [];
   const barriers: BarrierInfo[] = [];
   const fills: THREE.BufferGeometry[] = [];
@@ -48,8 +53,7 @@ export function createGates(): GatesScene {
   // Build chart data in logical order (gate 0 = first chronologically).
   for (let i = 0; i < GATE_COUNT; i++) {
     const z = FIRST_GATE_Z - i * GATE_SPACING;
-    const openSlot = GATE_OPEN_SLOTS[i % GATE_OPEN_SLOTS.length];
-    data.push({ z, openSlot });
+    data.push({ z, openSlot: openSlots[i] });
   }
 
   // Build geometry far→near so the merged transparent mesh composites
