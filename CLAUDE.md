@@ -2,60 +2,60 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Repository status
+## What this game is
 
-Early-stage. Milestone 1 (static cube-tunnel whitebox) is in. `docs/hellorun2-plan.md` is the authoritative design brief — read it before proposing anything that touches gameplay, audio, or visuals. Stack is Vite + TypeScript + three.js.
+Auto-forward first-person rhythm runner. The corridor is built from straights connected by 90° turns. The player has analog vertical movement between 3 gate-slots per gate. Gates kill on contact (one-hit death). A run = a song: BYOM audio analyzed in-browser, corridor + chart generated from the song. Tron (1982) Recognizer aesthetic — dark fills, glowing cyan edges, red "danger" barriers. Authoritative spec: [`docs/hellorun2-plan.md`](docs/hellorun2-plan.md).
+
+## Current state
+
+Working through plan §7's 10-milestone sequence. See [`docs/milestone-status.md`](docs/milestone-status.md) for per-milestone detail.
+
+- **Milestones 1–7 complete**: cube-tunnel whitebox, forward motion, player input, gates + collision, 90° turn + second straight, audio-clock-driven pathS, procedural chart generation.
+- **Milestone 8 in progress**: audio analysis via Essentia.js in a Web Worker. BPM + grid-offset detection working correctly. Drag-drop BYOM UI landed. Section detection and BPM-driven `FORWARD_SPEED` still pending.
+- **Milestones 9–10 not started**.
+
+## Read these before touching gameplay
+
+- [`docs/hellorun2-plan.md`](docs/hellorun2-plan.md) — design brief. Plan §2/§4/§5 define gameplay invariants that are not up for re-negotiation without user input.
+- [`docs/architecture.md`](docs/architecture.md) — how the code is organized: path model, state machine, input pipeline, chart system, audio pipeline, debug overlay.
+- [`docs/dev-tools.md`](docs/dev-tools.md) — npm scripts, Playwright tools, URL query params, dev-hook `window.__*` inventory.
+- [`docs/gotchas.md`](docs/gotchas.md) — non-obvious pitfalls encountered during development. **Read this before debugging WebGL/audio/Playwright issues** — many common failure modes are documented there with fixes.
+- [`docs/milestone-status.md`](docs/milestone-status.md) — which substeps of each milestone are done, pending, or deferred.
 
 ## Commands
 
-- `npm run dev` — start Vite dev server (http://localhost:5173)
+- `npm run dev` — Vite dev server at http://localhost:5173
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run build` — typecheck then Vite production build
-- `npm run preview` — serve the production build locally
-- `npm run visual-check` — headless Chromium loads the dev server, dumps pixel stats + any page/console errors, saves a screenshot to `tools/screenshots/tunnel.png`. Requires `npm run dev` running. Useful when you can't open a browser yourself.
+- `npm run visual-check` — full regression screenshot + pixel stats + motion detection
+- `node tools/<name>.mjs` — individual Playwright dev tools (see `docs/dev-tools.md`)
 
-## Visual verification gotcha
+## Stack
 
-`npm run visual-check` **must** use the full Chrome-for-Testing binary, not `chrome-headless-shell`. The headless-shell's WebGL pipeline silently fails to link three.js material shaders (`VALIDATE_STATUS false` with empty info log, all draw calls refused). The launcher in `tools/visual-check.mjs` pins `channel: "chromium"` for this reason — don't remove it.
+Vite 5 + TypeScript 5.6 (strict, noUnusedLocals, noUnusedParameters) + three.js r170. WebGL 2 via three.js `WebGLRenderer`. Audio via Web Audio API + Essentia.js (in a Web Worker). Playwright for automated dev-verification. No test runner — each `tools/*.mjs` is a direct-run Node script.
 
-Because the three.js renderer doesn't use `preserveDrawingBuffer`, trust `page.screenshot` (captured via the compositor) + pixel stats, not `canvas.toDataURL` inside a `page.evaluate`.
+## Axis convention
 
-## Layout
-
-- `src/main.ts` — renderer, scene, camera, animation loop
-- `src/constants.ts` — **feel-spec module** (plan §8). All tunable numbers live here — forward speed, vertical response, gate spacing, FOV, colors, tunnel dimensions. When adding a new tunable, extend this file rather than inlining the value at the call site.
-- `src/scene/` — scene-construction code (one file per kit piece / scene element). Static corridor geometry builders live here.
-- Axis convention: **-Z = forward, +X = right, +Y = up** (three.js default).
-
-## What this game is (one-paragraph orientation)
-
-Auto-forward first-person runner on a corridor built from straights + 90° turns. Analog vertical movement, 3-slot gates, one-hit death. A run = a song: the player drops in a local audio file, it's analyzed in-browser (BPM + beat grid + section detection), and the corridor/chart is generated from the song. Visual target is Tron (1982) Recognizer — solid dark fills, glowing edges, layer-selective bloom. See `docs/hellorun2-plan.md` for the authoritative spec.
+**−Z = forward, +X = right, +Y = up**. three.js default; never changes. Plan §1: "Player's vertical reference frame never changes."
 
 ## Locked architectural decisions
 
-These are already decided in the plan. Don't re-open them without the user asking:
+From plan §4/§5/§6. Don't reopen without explicit user ask:
 
-- **Renderer:** three.js. Kit-bashed corridor primitives built once at init; `InstancedMesh` for fills, per-instance `LineSegments` for edges. Edges baked from `EdgesGeometry` at init — **never recomputed at runtime**.
-- **Bloom:** `EffectComposer` with layer-selective `UnrealBloomPass` on the edge layer only. Fills stay crisp.
-- **Audio:** Web Audio API, in-browser analysis, 4/4 only for v1. Bring-your-own-music via local drag-drop — **no uploads, no streaming, no server storage**.
-- **Gameplay constraints:** no steering/throttle, no HUD, no health, no collectibles, no leaderboards, no pitch/roll (left/right 90° turns only).
-- **Hard reveal rule:** player cannot see the next straight's gates until the camera finishes the turn. Camera arcs through the corner during beat 4 so the downbeat hits as the new straight is revealed.
+- **Renderer**: three.js; merged `BufferGeometry` for the tunnel fills, merged fat-line (`LineSegments2` with `LineMaterial`) for edges. Cube edges are baked from `EdgesGeometry` at init — never recomputed per frame.
+- **Audio**: Web Audio API; Essentia.js for BPM/beat analysis, WASM-backed; **analysis must run in a Web Worker** (main thread cannot block for 30s). BYOM only — no uploads, no streaming, no server.
+- **Corridor**: built from "straights" (2 bars = 8 beats at 4/4) connected by 90° turns (left or right only, never pitch/roll). Gates never at turns.
+- **Gameplay**: no HUD, no health, no steering/throttle, no collectibles, no leaderboards. One-hit death. 4/4 time only for v1.
+- **Hard reveal**: player cannot see the next straight's gates until the camera finishes the turn arc (plan §2).
 
-## Build order is strict
+## Feel-spec single source of truth
 
-`docs/hellorun2-plan.md` §7 lists 10 milestones in a fixed sequence. The plan explicitly says *"Strict sequence — don't skip ahead."* Before adding anything, check which milestone is current and whether the proposed work belongs to it. In particular: milestones 6 (hardcoded song + hardcoded chart) must be fully working before any procedural (7) or audio-analysis (8) code is written.
+Every tunable number lives in [`src/constants.ts`](src/constants.ts). When adding a new parameter that affects game feel, extend that file rather than inlining the value at the call site. This is plan §8, and it matters because difficulty-tuning later should not fight feel-tuning.
 
-## Feel spec comes before gameplay code
+## Auto mode working style
 
-Per §8, numeric constants governing game feel (forward speed, vertical response curve, gate spacing, FOV, corner transition duration, hitbox dimensions, turn-beat empty-corridor length) must live in a **single source of truth** — kept in one module so they're tunable. Locked before procedural generation starts so difficulty tuning doesn't fight feel tuning. If asked to hardcode a feel value inline during milestones 2–5, put it in the constants module instead.
+The user (Carlos, `carlos@helloenjoy.com`, GitHub `C4RL05`) typically works in Claude Code Auto mode with terse answers — often single letters. Default behavior: state what you're about to do in one sentence, then execute. Only stop and ask when you hit a genuine branch point with different trade-offs. Match his terseness in return; avoid ceremony and don't summarize diffs he can read himself.
 
-## Open questions not yet resolved
+## Project repo
 
-Flagged in §9 — don't assume answers:
-
-- Audio analysis library (Essentia.js vs aubio.js vs hand-rolled)
-- Feel spec format (TS constants module vs JSON vs YAML)
-- Target resolution / DPR / mobile strategy
-- Song preview before a run
-
-When work touches one of these, surface the choice to the user rather than picking silently.
+GitHub: `https://github.com/C4RL05/hellorun2.git`. Main branch tracks `origin/main`. Local is usually several commits ahead; push only when the user asks. Never force-push to main.
