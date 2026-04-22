@@ -25,6 +25,10 @@ await page.evaluate(() => window.__startGame());
 await page.evaluate(() => window.__setMotionScale(0));
 await mkdir(OUT_DIR, { recursive: true });
 
+// Pull corridor geometry from the page so this tool self-updates when
+// TURN_BEATS / GATE_SPACING / etc. change in constants.ts.
+const corridor = await page.evaluate(() => window.__getCorridor());
+
 const snap = async (label, pathS) => {
   await page.evaluate((s) => window.__setPathS(s), pathS);
   // Two rAFs so camera.position + rotation catch up.
@@ -45,9 +49,7 @@ const snap = async (label, pathS) => {
   return { label, pathS, pose, path };
 };
 
-// Path layout: STRAIGHT_LENGTH=42, TURN_ARC_LENGTH=π*5/2 ≈ 7.854
-const STRAIGHT_LENGTH = 42;
-const TURN_ARC = Math.PI * 5 * 0.5;
+const { straightLength: STRAIGHT_LENGTH, turnArcLength: TURN_ARC } = corridor;
 
 const samples = [];
 samples.push(await snap("spawn", 0));

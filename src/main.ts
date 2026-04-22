@@ -7,30 +7,44 @@ import { DebugView } from "./debug-view";
 import type { DebugBbox } from "./debug-view";
 import type { BarrierInfo } from "./scene/gates";
 import {
+  BEAT_LENGTH,
+  BAR_LENGTH,
   CAMERA_FAR,
   CAMERA_FOV,
   CAMERA_NEAR,
-  CAMERA_START,
   CELL,
   COLOR_BACKGROUND,
   FIRST_GATE_Z,
   FORWARD_SPEED,
   GATE_COUNT,
   GATE_SPACING,
+  MARKER_BAR_COLOR,
+  MARKER_BAR_SIZE,
+  MARKER_BEAT_COLOR,
+  MARKER_BEAT_SIZE,
+  MARKER_PHRASE_COLOR,
+  MARKER_PHRASE_SIZE,
+  MARKER_SECTION_COLOR,
+  MARKER_SECTION_SIZE,
+  PHRASE_LENGTH,
+  SECTION_MARKER_LENGTH,
   TURN_ARC_LENGTH,
+  TURN_RADIUS,
+  forwardSpeedForBpm,
 } from "./constants";
 import {
-  PATH_TOTAL,
   STRAIGHT_LENGTH,
   samplePath,
-  STRAIGHT2_POS,
-  STRAIGHT2_YAW,
+  nextStraightAfter,
+  nextTurnAfter,
 } from "./corridor";
+import type { Section } from "./corridor";
 import { analyzeAudio } from "./audio-analysis/analyzer";
 import type { SongAnalysis } from "./audio-analysis/analyzer";
 import { generateChart, mulberry32 } from "./chart";
 import { PlayerController } from "./player";
 import { createGates } from "./scene/gates";
+import { createMarker, updateMarkerResolution } from "./scene/markers";
 import { createTunnel } from "./scene/tunnel";
 import { devSong } from "./songs";
 
@@ -61,17 +75,48 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
 const edgeMaterials: LineMaterial[] = [];
 
-interface Straight {
+// Rolling corridor: straights and turns are appended to `sections` as the
+// camera advances. Each straight section owns a matching StraightObj
+// (scene group + gates + barriers) at the same index in `straightObjects`;
+// turns push null there so parallel indexing into `sections[]` stays
+// branch-free in the hot path.
+interface StraightObj {
   readonly group: THREE.Object3D;
   readonly gates: readonly Gate[];
+  readonly openSlots: readonly number[];
   readonly barriers: readonly BarrierInfo[];
   readonly cubeTransforms: readonly THREE.Matrix4[];
 }
 
-function buildStraight(
-  name: string,
+const sections: Section[] = [];
+const straightObjects: (StraightObj | null)[] = [];
+const chart: number[] = [];
+let prevEndSlot: number | null = null;
+
+// PRNG for chart generation. Seeded via ?seed=N for deterministic tests;
+// otherwise Math.random. Reused across sections so the whole run is one
+// reproducible sequence under a fixed seed.
+const seedParam = new URL(window.location.href).searchParams.get("seed");
+const chartRand =
+  seedParam !== null ? mulberry32(parseInt(seedParam, 10) || 0) : Math.random;
+
+const COLOR_STRAIGHT_BOX = 0xffff00;
+const COLOR_BARRIER_BOX = 0xff6060;
+const COLOR_CUBE_BOX = 0x303030;
+
+// Shared geometry for per-cube OBB lines. Cheap: compute the cube's edge
+// segments once, then clone + transform per cube when building a section's
+// debug visual. Lives outside the function so the BoxGeometry / EdgesGeometry
+// aren't rebuilt per section.
+const CUBE_EDGES = new THREE.EdgesGeometry(
+  new THREE.BoxGeometry(CELL, CELL, CELL),
+  40,
+);
+
+function buildStraightObj(
   openSlots: readonly number[],
-): Straight {
+  name: string,
+): StraightObj {
   const tunnel = createTunnel();
   const gates = createGates(openSlots);
   edgeMaterials.push(tunnel.edgeMaterial, gates.edgeMaterial);
@@ -82,38 +127,151 @@ function buildStraight(
   return {
     group,
     gates: gates.data,
+    openSlots,
     barriers: gates.barriers,
     cubeTransforms: tunnel.cubeTransforms,
   };
 }
 
-// Procedural chart (plan §7 M7): 16 gates across both straights. Seed
-// from URL (?seed=N) for deterministic playtests; otherwise Math.random
-// for a fresh chart each page load.
-const seedParam = new URL(window.location.href).searchParams.get("seed");
-const chartRand =
-  seedParam !== null ? mulberry32(parseInt(seedParam, 10) || 0) : Math.random;
-const chart = generateChart(GATE_COUNT * 2, { rand: chartRand });
+// Mounts a section into the scene and keeps `sections` / `straightObjects`
+// index-aligned. Straights also build geometry, extend the running chart,
+// and (if debugView is already up) register debug bboxes.
+function appendSection(section: Section): void {
+  sections.push(section);
+  if (section.kind !== "straight") {
+    straightObjects.push(null);
+    return;
+  }
+  const openSlots = generateChart(GATE_COUNT, {
+    rand: chartRand,
+    prevEndSlot: prevEndSlot ?? undefined,
+  });
+  prevEndSlot = openSlots[openSlots.length - 1];
+  chart.push(...openSlots);
+  const idx = straightObjects.length;
+  const obj = buildStraightObj(openSlots, `straight-${idx}`);
+  obj.group.position.copy(section.position);
+  obj.group.rotation.y = section.yaw;
+  scene.add(obj.group);
+  obj.group.updateMatrixWorld(true);
+  straightObjects.push(obj);
+  if (debugView) registerStraightDebugHelpers(obj);
+}
 
-const straight1 = buildStraight("straight1", chart.slice(0, GATE_COUNT));
-scene.add(straight1.group);
+function registerStraightDebugHelpers(obj: StraightObj): void {
+  const bboxes: DebugBbox[] = [
+    { box: new THREE.Box3().setFromObject(obj.group), color: COLOR_STRAIGHT_BOX },
+  ];
+  for (const b of obj.barriers) {
+    const box = new THREE.Box3().setFromCenterAndSize(b.localCenter, b.size);
+    box.applyMatrix4(obj.group.matrixWorld);
+    bboxes.push({ box, color: COLOR_BARRIER_BOX });
+  }
+  debugView.addBboxes(bboxes);
+  scene.add(buildCubeOBBLines(obj));
+}
 
-const straight2 = buildStraight(
-  "straight2",
-  chart.slice(GATE_COUNT, GATE_COUNT * 2),
-);
-straight2.group.position.copy(STRAIGHT2_POS);
-straight2.group.rotation.y = STRAIGHT2_YAW;
-scene.add(straight2.group);
+// Per-cube oriented bboxes merged into one LineSegments per section. Each
+// cube's full local transform (translation + ±CUBE_JITTER_DEG rotation) is
+// composed with the straight's world matrix so the OBBs match the rendered
+// jitter. Layer 1 only — the main game camera never sees these.
+function buildCubeOBBLines(obj: StraightObj): THREE.LineSegments {
+  const geoms: THREE.BufferGeometry[] = [];
+  const worldMatrix = new THREE.Matrix4();
+  for (const localMat of obj.cubeTransforms) {
+    worldMatrix.multiplyMatrices(obj.group.matrixWorld, localMat);
+    geoms.push(CUBE_EDGES.clone().applyMatrix4(worldMatrix));
+  }
+  const merged = mergeGeometries(geoms, false);
+  if (!merged) throw new Error("Failed to merge cube bbox geometry");
+  for (const g of geoms) g.dispose();
+  const lines = new THREE.LineSegments(
+    merged,
+    new THREE.LineBasicMaterial({ color: COLOR_CUBE_BOX }),
+  );
+  lines.layers.set(1);
+  return lines;
+}
 
-const straights: readonly Straight[] = [straight1, straight2];
+// How far ahead of the camera to keep sections materialized. Covers
+// current straight + turn + next straight + slack (40+5+40+35=120) so
+// the next straight is always fully built before the camera can see it.
+const SECTION_LOOKAHEAD = 120;
+
+// Alternates straight → turn → straight → turn from the first section.
+// Turns alternate right/left so the corridor zig-zags rather than closing
+// into a 4-section square (four all-right turns of the same radius sum to
+// a perfect loop and overlap prior geometry — visible as z-fighting in
+// the tunnel walls when the player reaches pathS ≈ 4 × (straight+turn)).
+let turnsBuilt = 0;
+function ensureSectionsAhead(pathS: number): void {
+  while (true) {
+    const last = sections[sections.length - 1];
+    if (last && last.pathStart + last.length >= pathS + SECTION_LOOKAHEAD) return;
+    if (!last) {
+      appendSection({
+        kind: "straight",
+        pathStart: 0,
+        length: STRAIGHT_LENGTH,
+        position: new THREE.Vector3(0, 0, 0),
+        yaw: 0,
+      });
+      continue;
+    }
+    if (last.kind === "straight") {
+      const direction = turnsBuilt % 2 === 0 ? 1 : -1;
+      turnsBuilt++;
+      appendSection(nextTurnAfter(last, direction));
+    } else {
+      appendSection(nextStraightAfter(last));
+    }
+  }
+}
+
+// Musical-structure markers. Each type advances its own index independently
+// so the placement sequence is O(ΔpathS / interval) per call — bounded and
+// cheap. Start indices at 1 so pathS=0 (camera spawn, inside the marker
+// plane) isn't generated; the first visible beat marker is at pathS =
+// BEAT_LENGTH.
+let nextBeatIdx = 1;
+let nextBarIdx = 1;
+let nextPhraseIdx = 1;
+let nextSectionIdx = 1;
+
+function placeMarkersUpTo(maxPathS: number): void {
+  placeOneKind(maxPathS, BEAT_LENGTH, MARKER_BEAT_SIZE, MARKER_BEAT_COLOR, () => nextBeatIdx, (n) => { nextBeatIdx = n; });
+  placeOneKind(maxPathS, BAR_LENGTH, MARKER_BAR_SIZE, MARKER_BAR_COLOR, () => nextBarIdx, (n) => { nextBarIdx = n; });
+  placeOneKind(maxPathS, PHRASE_LENGTH, MARKER_PHRASE_SIZE, MARKER_PHRASE_COLOR, () => nextPhraseIdx, (n) => { nextPhraseIdx = n; });
+  placeOneKind(maxPathS, SECTION_MARKER_LENGTH, MARKER_SECTION_SIZE, MARKER_SECTION_COLOR, () => nextSectionIdx, (n) => { nextSectionIdx = n; });
+}
+
+function placeOneKind(
+  maxPathS: number,
+  interval: number,
+  size: number,
+  color: number,
+  getIdx: () => number,
+  setIdx: (n: number) => void,
+): void {
+  let i = getIdx();
+  while (i * interval <= maxPathS) {
+    const s = i * interval;
+    const pose = samplePath(sections, s);
+    const marker = createMarker(size, color);
+    marker.position.copy(pose.pos);
+    marker.rotation.y = pose.yaw;
+    scene.add(marker);
+    i++;
+  }
+  setIdx(i);
+}
 
 const syncResolution = () => {
   for (const mat of edgeMaterials) {
     mat.resolution.set(window.innerWidth, window.innerHeight);
   }
+  updateMarkerResolution(window.innerWidth, window.innerHeight);
 };
-syncResolution();
 
 addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -125,74 +283,40 @@ addEventListener("resize", () => {
 const clock = new THREE.Clock();
 const player = new PlayerController(canvas);
 
-// Compute debug bboxes in world space for each straight group and each
-// individual barrier inside its gates. updateMatrixWorld first so
-// straight2's positioned/rotated transform is baked in.
-const COLOR_STRAIGHT_BOX = 0xffff00;
-const COLOR_BARRIER_BOX = 0xff6060;
-const COLOR_CUBE_BOX = 0x4080c0;
-const debugBboxes: DebugBbox[] = [];
-for (const s of straights) {
-  s.group.updateMatrixWorld(true);
-  debugBboxes.push({
-    box: new THREE.Box3().setFromObject(s.group),
-    color: COLOR_STRAIGHT_BOX,
-  });
-  for (const b of s.barriers) {
-    const box = new THREE.Box3().setFromCenterAndSize(b.localCenter, b.size);
-    box.applyMatrix4(s.group.matrixWorld);
-    debugBboxes.push({ box, color: COLOR_BARRIER_BOX });
-  }
-}
+// DebugView is created empty; sections register their bboxes as they are
+// appended (see registerStraightDebugHelpers). Per-cube OBB lines were a
+// static-only visual and have been dropped — they would need re-merging
+// every time a new section is generated and weren't worth the complexity.
+const debugView = new DebugView(scene, canvas, []);
 
-const debugView = new DebugView(scene, canvas, debugBboxes);
-
-// Per-cube oriented bboxes merged into one LineSegments. Each cube uses
-// its full local transform (translation + ±CUBE_JITTER_DEG rotation), then
-// composed with the straight's world matrix. 1920 cubes cost one draw
-// call.
-const cubeBboxLines = buildCubeBboxLines(straights, COLOR_CUBE_BOX);
-scene.add(cubeBboxLines);
-
-function buildCubeBboxLines(
-  straights: readonly Straight[],
-  color: number,
-): THREE.LineSegments {
-  const cubeBox = new THREE.BoxGeometry(CELL, CELL, CELL);
-  const cubeEdges = new THREE.EdgesGeometry(cubeBox, 40);
-  const geoms: THREE.BufferGeometry[] = [];
-  const worldMatrix = new THREE.Matrix4();
-  for (const s of straights) {
-    for (const localMat of s.cubeTransforms) {
-      worldMatrix.multiplyMatrices(s.group.matrixWorld, localMat);
-      geoms.push(cubeEdges.clone().applyMatrix4(worldMatrix));
-    }
-  }
-  const merged = mergeGeometries(geoms, false);
-  if (!merged) throw new Error("Failed to merge cube bbox geometry");
-  for (const g of geoms) g.dispose();
-  cubeBox.dispose();
-  cubeEdges.dispose();
-  const lines = new THREE.LineSegments(
-    merged,
-    new THREE.LineBasicMaterial({ color }),
-  );
-  lines.layers.set(1);
-  return lines;
-}
+// Seed the corridor with enough sections to cover the lookahead before the
+// first frame renders. ensureSectionsAhead appends straights/turns until
+// there's headroom past the given pathS.
+ensureSectionsAhead(0);
+placeMarkersUpTo(SECTION_LOOKAHEAD);
+syncResolution();
 
 let dead = false;
 let pathS = 0;
-// Monotonic distance traveled — tracks total meters regardless of corridor
-// wrap. Used to derive pathS and to detect loop wraparounds under the
-// audio clock (where a frame can in principle jump across multiple wraps).
-let totalPathS = 0;
 let motionScale = 1;
 let invincible = false;
 // Plan §1: "A run = a song. Game starts when the song starts, ends when
 // the song ends (or the player dies)." `running` gates pathS advancement
 // so nothing moves until the user clicks the title screen.
 let running = false;
+// Spacebar-toggled freeze. Audio is stopped and the song position is
+// snapshotted into pauseOffsetSec; unpausing creates a fresh
+// AudioBufferSourceNode started at that offset and realigns audioStartTime
+// so getAudioNow() picks up seamlessly — beat sync survives any number of
+// pause/unpause cycles because the offset comes from the audio context's
+// sample clock, not wall time.
+let paused = false;
+let pauseOffsetSec = 0;
+// True if audio was actually playing at the moment of pause. Tracks
+// whether the unpause branch should recreate an AudioBufferSourceNode or
+// just flip the flag — e.g., tests without a user gesture never start
+// audio, so unpause must not spontaneously start it.
+let pauseHadAudio = false;
 
 // Audio pipeline. Preload on boot; play on user gesture (click).
 let audioCtx: AudioContext | null = null;
@@ -202,11 +326,14 @@ let audioSource: AudioBufferSourceNode | null = null;
 // Subtracting this (and gridOffsetSec) from audioCtx.currentTime gives
 // "audio time since beat 1" — the master clock for pathS.
 let audioStartTime = 0;
-// Filled by the analyzer worker after decode. gridOffsetSec is the only
-// analyzed field that feeds back into runtime behavior right now — it
-// aligns the audio-clock math so pathS=0 coincides with beat 1 of the
-// song. bpm and beats[] are exposed via songAnalysis for M9 wiring.
+// Filled by the analyzer worker after decode. gridOffsetSec aligns the
+// audio-clock math so pathS=0 coincides with beat 1 of the song.
+// currentForwardSpeed is derived from detected BPM so gates land on beats
+// at any tempo (plan §8 feel-spec: constants define 120-BPM defaults,
+// runtime values scale per song). beats[] is exposed via songAnalysis
+// for M9 wiring.
 let currentGridOffsetSec = devSong.gridOffsetSec;
+let currentForwardSpeed = FORWARD_SPEED;
 let songAnalysis: SongAnalysis | null = null;
 
 const titleOverlay = document.getElementById("title-screen");
@@ -218,6 +345,16 @@ const titleSubtitle = titleOverlay?.querySelector(".subtitle") as
 // check their captured gen against the latest and bail. Dropping a new
 // file during a prior analysis correctly supersedes it.
 let analysisGen = 0;
+
+// Maps analyzer-worker stage names (technical) to subtitle labels (friendly).
+// Stages that go unmapped fall through to the raw worker name.
+const STAGE_LABELS: Record<string, string> = {
+  loading: "loading analyzer",
+  loaded: "analyzer ready",
+  rhythm: "detecting beats",
+  percival: "verifying tempo",
+  consensus: "finalizing",
+};
 
 async function loadAndAnalyzeSource(
   source: File | string,
@@ -245,15 +382,34 @@ async function loadAndAnalyzeSource(
     if (gen !== analysisGen) return;
     songAnalysis = null;
 
-    setSubtitle("analyzing audio…");
-    const result = await analyzeAudio(audioBuffer, (p) => {
-      setSubtitle(`analyzing audio: ${Math.round(p.progress * 100)}%`);
-    });
+    // The worker's beat-detection and tempo-verification steps are single
+    // synchronous WASM calls that can run for tens of seconds; no progress
+    // messages fire during them. Tick elapsed time on the main thread so
+    // the subtitle keeps moving even while the worker is WASM-bound.
+    const analysisStart = performance.now();
+    let stage = "starting";
+    const renderTick = () => {
+      const elapsed = Math.round((performance.now() - analysisStart) / 1000);
+      setSubtitle(`analyzing audio — ${stage} (${elapsed}s)`);
+    };
+    renderTick();
+    const tickInterval = setInterval(renderTick, 250);
+    let result;
+    try {
+      result = await analyzeAudio(audioBuffer, (p) => {
+        stage = STAGE_LABELS[p.stage] ?? p.stage;
+        renderTick();
+      });
+    } finally {
+      clearInterval(tickInterval);
+    }
     if (gen !== analysisGen) return;
     songAnalysis = result;
     currentGridOffsetSec = result.gridOffsetSec;
+    currentForwardSpeed = forwardSpeedForBpm(result.bpm);
     console.log(
       `analyzed ${label}: bpm=${result.bpm.toFixed(2)}, ` +
+        `forwardSpeed=${currentForwardSpeed.toFixed(2)} u/s, ` +
         `gridOffsetSec=${result.gridOffsetSec.toFixed(3)}, ` +
         `confidence=${result.confidence.toFixed(2)}, ` +
         `beats=${result.beats.length}`,
@@ -309,9 +465,43 @@ function stopAudio(): void {
 
 function startGame(): void {
   if (running) return;
+  paused = false;
   startAudio();
   running = true;
   titleOverlay?.classList.add("hidden");
+}
+
+// Spacebar toggle. Pause stops the current AudioBufferSourceNode (it's
+// one-shot; can't resume) and snapshots the song position via the audio
+// context's sample clock. Unpause creates a fresh source started at that
+// offset and realigns audioStartTime so getAudioNow() is continuous —
+// beat sync is preserved across arbitrary pause/unpause cycles. When no
+// audio is active (e.g., headless tests without a user gesture), toggle
+// just flips the `paused` flag; the animation loop's `!paused` guard
+// freezes pathS in wall-clock fallback mode too.
+function togglePause(): void {
+  if (!running || dead) return;
+  if (paused) {
+    paused = false;
+    if (pauseHadAudio && audioCtx && audioBuffer) {
+      audioSource = audioCtx.createBufferSource();
+      audioSource.buffer = audioBuffer;
+      audioSource.connect(audioCtx.destination);
+      audioSource.onended = () => {
+        running = false;
+      };
+      audioStartTime = audioCtx.currentTime - pauseOffsetSec;
+      audioSource.start(0, pauseOffsetSec);
+    }
+  } else {
+    pauseHadAudio = false;
+    if (audioCtx && audioSource) {
+      pauseOffsetSec = audioCtx.currentTime - audioStartTime;
+      pauseHadAudio = true;
+    }
+    stopAudio();
+    paused = true;
+  }
 }
 
 titleOverlay?.addEventListener("click", () => {
@@ -383,7 +573,8 @@ function collisionAcrossStraights(
   prevWorld: THREE.Vector3,
   currWorld: THREE.Vector3,
 ): Hit | null {
-  for (const s of straights) {
+  for (const s of straightObjects) {
+    if (!s) continue;
     tmpLocalPrev.copy(prevWorld);
     s.group.worldToLocal(tmpLocalPrev);
     tmpLocalCurr.copy(currWorld);
@@ -403,14 +594,14 @@ function collisionAcrossStraights(
 
 const prevWorldPos = new THREE.Vector3();
 
-// State-only reset: camera, player input, dead flag. Doesn't touch audio
-// or the running flag. Used at boot and by the __respawn dev hook.
+// State-only reset: camera, player input, dead flag. Doesn't touch audio,
+// the running flag, or the built section geometry (sections remain valid
+// across respawn; the player re-enters at pathS=0 = start of section 0).
 const resetToSpawn = () => {
   pathS = 0;
-  totalPathS = 0;
   player.reset();
   dead = false;
-  const pose = samplePath(0);
+  const pose = samplePath(sections, 0);
   camera.position.copy(pose.pos);
   camera.rotation.set(0, pose.yaw, 0);
   prevWorldPos.copy(camera.position);
@@ -420,6 +611,7 @@ const resetToSpawn = () => {
 // resume play. Plan §1: "A run = a song" — each respawn is a new run.
 const respawn = () => {
   resetToSpawn();
+  paused = false;
   if (audioBuffer) {
     stopAudio();
     startAudio();
@@ -433,6 +625,7 @@ const respawn = () => {
 const quitToTitle = () => {
   stopAudio();
   running = false;
+  paused = false;
   resetToSpawn();
   titleOverlay?.classList.remove("hidden");
 };
@@ -446,34 +639,32 @@ renderer.setAnimationLoop(() => {
 
   prevWorldPos.copy(camera.position);
 
-  let wrapped = false;
-  if (running && !dead) {
-    const prevTotal = totalPathS;
+  if (running && !dead && !paused) {
     if (motionScale === 1) {
       // Real play: audio clock is master. Falls back to wall-clock when
       // no audio is playing yet (e.g., headless tests without a user
-      // gesture).
+      // gesture). pathS is monotonic — no wrap since the corridor now
+      // generates sections ahead indefinitely (bounded by song length).
       const audioNow = getAudioNow();
       if (audioNow !== null) {
-        totalPathS = Math.max(0, audioNow * FORWARD_SPEED);
+        pathS = Math.max(0, audioNow * currentForwardSpeed);
       } else {
-        totalPathS += FORWARD_SPEED * dt;
+        pathS += currentForwardSpeed * dt;
       }
     } else {
       // Scaled test mode: wall-clock advance with the scale factor.
       // motionScale=0 freezes motion entirely.
-      totalPathS += FORWARD_SPEED * motionScale * dt;
+      pathS += currentForwardSpeed * motionScale * dt;
     }
-    wrapped =
-      Math.floor(totalPathS / PATH_TOTAL) !== Math.floor(prevTotal / PATH_TOTAL);
-    pathS = totalPathS % PATH_TOTAL;
+    ensureSectionsAhead(pathS);
+    placeMarkersUpTo(pathS + SECTION_LOOKAHEAD);
   }
 
-  const pose = samplePath(pathS);
+  const pose = samplePath(sections, pathS);
   camera.position.set(pose.pos.x, pose.pos.y + playerY, pose.pos.z);
   camera.rotation.y = pose.yaw;
 
-  if (!dead && !wrapped && !invincible) {
+  if (!dead && !invincible) {
     const hit = collisionAcrossStraights(prevWorldPos, camera.position);
     if (hit) {
       dead = true;
@@ -504,6 +695,10 @@ renderer.setAnimationLoop(() => {
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR") respawn();
   else if (e.code === "Escape") quitToTitle();
+  else if (e.code === "Space") {
+    e.preventDefault(); // don't scroll the page
+    togglePause();
+  }
   else if (e.code === "KeyI") {
     invincible = !invincible;
     console.log(`invincibility: ${invincible ? "ON" : "OFF"}`);
@@ -544,7 +739,8 @@ if (import.meta.env.DEV) {
   w.__getPathS = () => pathS;
   w.__setPathS = (s) => {
     pathS = s;
-    totalPathS = s;
+    // Grow the corridor if the test jumps the camera past what's built.
+    ensureSectionsAhead(s);
   };
   w.__startGame = () => {
     running = true;
@@ -554,22 +750,33 @@ if (import.meta.env.DEV) {
   (w as unknown as {
     __getSongAnalysis: () => SongAnalysis | null;
   }).__getSongAnalysis = () => songAnalysis;
-  // Test-only: returns arrival time (in ms, wall-clock at FORWARD_SPEED)
-  // for each gate in chart order. Straight 1 gates first, then straight 2.
-  // Derived from current constants so tests don't drift when GATE_COUNT or
-  // BEATS_PER_GATE changes.
+  // Test-only: arrival time (in ms at currentForwardSpeed) for each gate
+  // currently built, in chart order across all straight sections. Tests
+  // should `await __getSongAnalysis() !== null` before reading, since BPM
+  // detection flips the speed.
   (w as unknown as { __getGateTimesMs: () => number[] }).__getGateTimesMs = () => {
     const times: number[] = [];
-    for (let i = 0; i < GATE_COUNT; i++) {
-      const pathAtGate = CAMERA_START.z - (FIRST_GATE_Z - i * GATE_SPACING);
-      times.push(Math.round((pathAtGate / FORWARD_SPEED) * 1000));
-    }
-    for (let i = 0; i < GATE_COUNT; i++) {
-      const localPathAtGate =
-        CAMERA_START.z - (FIRST_GATE_Z - i * GATE_SPACING);
-      const fullPathS = STRAIGHT_LENGTH + TURN_ARC_LENGTH + localPathAtGate;
-      times.push(Math.round((fullPathS / FORWARD_SPEED) * 1000));
+    for (const sec of sections) {
+      if (sec.kind !== "straight") continue;
+      for (let i = 0; i < GATE_COUNT; i++) {
+        const localPathAtGate = -FIRST_GATE_Z + i * GATE_SPACING;
+        const globalPathAtGate = sec.pathStart + localPathAtGate;
+        times.push(Math.round((globalPathAtGate / currentForwardSpeed) * 1000));
+      }
     }
     return times;
   };
+  (w as unknown as { __getForwardSpeed: () => number }).__getForwardSpeed = () =>
+    currentForwardSpeed;
+  (w as unknown as {
+    __getCorridor: () => {
+      straightLength: number;
+      turnArcLength: number;
+      turnRadius: number;
+    };
+  }).__getCorridor = () => ({
+    straightLength: STRAIGHT_LENGTH,
+    turnArcLength: TURN_ARC_LENGTH,
+    turnRadius: TURN_RADIUS,
+  });
 }

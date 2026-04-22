@@ -51,6 +51,11 @@ export interface GenerateOptions {
   // Explicit PRNG for deterministic charts in tests. Defaults to
   // Math.random for fresh procedural output every page load.
   readonly rand?: () => number;
+  // If provided, skips the spawn-safety first-phrase rule and continues
+  // from the given prior slot using the corner-continuity rule. Used by
+  // rolling section generation so each new section picks phrases
+  // consistent with the previous section's last gate.
+  readonly prevEndSlot?: number;
 }
 
 // Builds a chart of `gateCount` slot indices by concatenating phrases.
@@ -62,8 +67,9 @@ export function generateChart(
   const rand = options.rand ?? Math.random;
 
   const out: number[] = [];
-  let prevEndSlot = 1;
-  let isFirst = true;
+  const hasPrev = options.prevEndSlot !== undefined;
+  let prevEndSlot = hasPrev ? (options.prevEndSlot as number) : 1;
+  let isFirst = !hasPrev;
 
   while (out.length < gateCount) {
     const phrase = isFirst

@@ -37,7 +37,8 @@ try {
   console.log(`analysis completed in ${elapsed}s`);
   console.log("");
   console.log(`consensus BPM:       ${analysis.bpm.toFixed(2)}`);
-  console.log(`gridOffsetSec:       ${analysis.gridOffsetSec.toFixed(3)}`);
+  console.log(`gridOffsetSec:       ${analysis.gridOffsetSec.toFixed(3)}  (back-extrapolated from beats[0]=${analysis.beats[0]?.toFixed(3) ?? "n/a"})`);
+  console.log(`firstAudibleSec:     ${analysis.firstAudibleSec.toFixed(3)}  (Essentia OnsetRate; lower bound for back-extrap)`);
   console.log(`multifeature conf:   ${analysis.confidence.toFixed(2)}  (0..5.32; 3.0+ high, 2.5+ solid)`);
   console.log("");
   console.log("algorithm outputs:");

@@ -53,8 +53,10 @@ Registered in `main.ts` under `import.meta.env.DEV`. Production builds dead-code
 | `__setPathS(s)` | Sets both `pathS` and `totalPathS` so samplePath() immediately picks up the new value. Used for exploring the path by hand (turn-check). | turn-check |
 | `__startGame()` | Flips `running=true` and hides title overlay without requiring user gesture. **Does not start audio** — tests would need a real click for that. Every test calls this to dismiss the title. | every tool |
 | `__getChart()` | `number[]` — the generated chart's slot sequence | collision-check |
-| `__getGateTimesMs()` | `number[]` — time-to-reach (ms) per gate at current `FORWARD_SPEED`. Derived from constants; self-updating when `BEATS_PER_GATE` changes. | collision-check |
+| `__getGateTimesMs()` | `number[]` — time-to-reach (ms) per gate at current `currentForwardSpeed`. Tests should `await __getSongAnalysis() !== null` before reading, since BPM detection flips the speed. | collision-check |
 | `__getSongAnalysis()` | `SongAnalysis \| null` — full Essentia output (bpm, beats, gridOffsetSec, confidence, per-algorithm raw) once analysis completes | analysis-check |
+| `__getForwardSpeed()` | `number` — live `currentForwardSpeed` (u/s). Equals `FORWARD_SPEED` before analysis, `forwardSpeedForBpm(bpm)` after. | ad-hoc |
+| `__getCorridor()` | `{ straightLength, turnArcLength, turnRadius }` — derived corridor geometry. Use this instead of hardcoding in tools so changes to `TURN_BEATS` don't silently break sample points. | turn-check |
 
 ## Tool-by-tool detail
 
@@ -94,7 +96,7 @@ This test adapts to whatever the generator produced, so it also implicitly valid
 
 ### `turn-check.mjs`
 
-Samples `__setPathS()` at five waypoints (spawn, end-of-straight1, mid-turn, end-of-turn, mid-straight2) and verifies `__camera.position` + `.rotation.y` match the expected arc. Screenshots each. Math check: mid-turn should be `(1.46, 0, −43.54)` with yaw `−45°` at TURN_RADIUS=5.
+Samples `__setPathS()` at five waypoints (spawn, end-of-straight1, mid-turn, end-of-turn, mid-straight2) and verifies `__camera.position` + `.rotation.y` match the expected arc. Screenshots each. Reads corridor geometry from `__getCorridor()` so it self-updates when `TURN_BEATS` or `GATE_SPACING` changes. Mid-turn yaw is always `−45°`; position is `(TURN_RADIUS × (1 − √½), 0, −STRAIGHT_LENGTH − TURN_RADIUS × √½)`.
 
 ### `debug-view-check.mjs`
 

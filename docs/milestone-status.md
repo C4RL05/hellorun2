@@ -82,26 +82,28 @@ Plan: BPM + beat grid + section detection. Drop-in audio files.
 - ✅ **Sample-rate fix**: resample to 44100 before analysis (was causing 110 vs 120 miscount — see [`gotchas.md`](gotchas.md))
 - ✅ **Consensus heuristic**: if multifeature confidence ≥ 3.0 use it; else check agreement with Percival (direct or harmonic); else use median of `bpmEstimates`
 - ✅ **Drag-drop BYOM UI**: title screen has a drop zone (also click-to-browse). Any dropped audio replaces the current song, re-analyzes. Race-safe via generation counter.
+- ✅ **BPM → FORWARD_SPEED wiring**: `currentForwardSpeed` in `main.ts` is set from `forwardSpeedForBpm(bpm)` after analysis completes, so gates land on the beats of any song. The `FORWARD_SPEED = 10` constant remains as the 120-BPM default (used until analysis lands or if analysis fails). `__getGateTimesMs()` reads the live speed; `collision-check.mjs` awaits analysis before reading to avoid the race.
 
 **Deferred / not started**:
 - ❌ **Section detection** — verse/chorus/bridge. Essentia has `SBic` (Bayesian-info-criterion segmentation); plan §9 flagged the library choice as open. Could alternatively use novelty segmentation from spectral flux. Needed for M9 palette shifts and per-section difficulty.
-- ❌ **BPM → FORWARD_SPEED wiring**: `FORWARD_SPEED` is still a constant `10`. Detected BPM should set it to `GATE_SPACING × bpm / (BEATS_PER_GATE × 60)` so gates land on the beats of *any* song, not just 120-BPM ones.
 - ❌ **Confidence threshold UX**: low-confidence analyses should warn the player ("analysis uncertain — sync may feel off"). Currently analysis failures fall back to defaults silently.
 
 **Files**: `src/audio-analysis/analyzer.ts`, `src/audio-analysis/analyzer-worker.ts`, `src/songs.ts`, `src/main.ts` (loadAndAnalyzeSource flow + drop handlers), `tools/analysis-check.mjs`.
 
-## ⏳ M9 — Chart generation from audio (not started)
+## 🟡 M9 — Chart generation from audio (partially started)
 
 Plan: sections drive difficulty, beats drive gate placement, section boundaries drive palette shifts.
 
-Prerequisites:
-- M8's section detection (blocking)
-- BPM → FORWARD_SPEED coupling (can be done standalone but M9 will depend on it)
+**Done early** (moved up from M10 because beat-alignment couldn't be finalized without it):
+- ✅ **Rolling corridor generation**: the two-straight stub with wraparound is gone. `src/corridor.ts` now exports `Section` (straight or turn) and `samplePath(sections, s)`; `main.ts` maintains a growing `sections[]` with `ensureSectionsAhead(pathS)` appending straight→turn→straight→turn on demand. Turn direction alternates right/left so the corridor zig-zags rather than closing on itself after 4 right turns. Chart generator is now streamed per-section via `generateChart(GATE_COUNT, { prevEndSlot })`, preserving the corner-continuity rule across section boundaries. `CAMERA_START.z = 0` (no approach) so all straights are uniformly 40 units = 8 beats at the beat-locked forward speed.
 
-Scope when it starts:
-- Replace `generateChart(gateCount)` with a song-aware generator that reads section boundaries and emits higher-density / higher-difficulty charts during high-energy sections
-- Trigger palette shifts on section boundaries (plan §5)
-- Consider streaming chart generation (instead of generating all gates at init, generate the next straight as the previous one recycles — plan §6 "Corridor sections are built as the player progresses")
+**Still pending**:
+- ❌ Song-aware density (denser phrases during high-energy sections)
+- ❌ Palette shifts on section boundaries (plan §5)
+- ❌ Difficulty curve driven by detected song energy
+
+Prerequisites for the remaining work:
+- M8's section detection (blocking)
 
 ## ⏳ M10 — Polish (not started)
 
@@ -110,7 +112,7 @@ Plan §10 non-goals and §5/§6 visual upgrades:
 - **Beat pulse**: edge brightness lift on downbeats (~10–15%, more on phrase/bar starts)
 - **Wave effect** on beat / phrase boundary
 - **Palette transitions** tied to song sections (M9 dependency)
-- **Corridor recycling** (plan §6) — currently we just loop through 2 straights; real game recycles straights with fresh chart content from M9
+- **Corridor recycling** (plan §6) — rolling generation is done (see M9), but we never prune old sections behind the camera. A long song will accumulate dozens of straight groups that the player can't see. Add a prune step keyed to `pathS − last_section_end` distance.
 - **Title / end screens** polish
 - **Bloom performance tuning** — plan §6 calls it out as the main per-pixel cost
 

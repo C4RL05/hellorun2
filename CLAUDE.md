@@ -11,8 +11,9 @@ Auto-forward first-person rhythm runner. The corridor is built from straights co
 Working through plan §7's 10-milestone sequence. See [`docs/milestone-status.md`](docs/milestone-status.md) for per-milestone detail.
 
 - **Milestones 1–7 complete**: cube-tunnel whitebox, forward motion, player input, gates + collision, 90° turn + second straight, audio-clock-driven pathS, procedural chart generation.
-- **Milestone 8 in progress**: audio analysis via Essentia.js in a Web Worker. BPM + grid-offset detection working correctly. Drag-drop BYOM UI landed. Section detection and BPM-driven `FORWARD_SPEED` still pending.
-- **Milestones 9–10 not started**.
+- **Milestone 8 in progress**: audio analysis via Essentia.js in a Web Worker. BPM + grid-offset detection working, BPM-driven forward speed wired (gates land on beats at any tempo). Drag-drop BYOM UI landed. Section detection still pending.
+- **Milestone 9 partially done ahead of schedule**: rolling corridor generation (section list, `ensureSectionsAhead`, alternating turns, streamed per-section charts with corner continuity). Song-aware density/palette shifts still pending — blocked on M8 section detection.
+- **Milestone 10 not started**.
 
 ## Read these before touching gameplay
 

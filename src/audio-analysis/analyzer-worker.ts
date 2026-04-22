@@ -54,6 +54,7 @@ let essentia: {
     minBPM?: number,
     sampleRate?: number,
   ) => { bpm: number };
+  OnsetRate: (signal: unknown) => { onsets: VectorFloat; onsetRate: number };
 } | null = null;
 
 async function ensureReady(): Promise<void> {
@@ -89,6 +90,10 @@ export type AnalysisResponse =
       readonly bpmPercival: number;
       readonly bpmEstimates: readonly number[];
       readonly bpmIntervals: readonly number[];
+      // First onset time (seconds) from Essentia's OnsetRate. Used as the
+      // lower bound for grid-offset back-extrapolation and exposed so
+      // tools can show why that bound stopped back-extrap where it did.
+      readonly firstAudibleSec: number;
     }
   | { readonly type: "error"; readonly message: string };
 
@@ -128,18 +133,38 @@ self.onmessage = async (e: MessageEvent<AnalysisRequest>) => {
       bpmEstimates,
     );
 
+    // Lower bound for back-extrapolation: the first onset (seconds) found
+    // by Essentia's OnsetRate pipeline (HFC + complex-domain methods).
+    // Prevents the grid offset from being back-extrapolated into pre-music
+    // silence. Falls back to 0 if the detector fails.
+    let firstAudibleSec = 0;
+    try {
+      const onsetResult = essentia!.OnsetRate(signal);
+      const onsets = vecToArray(onsetResult.onsets);
+      if (onsets.length > 0) firstAudibleSec = onsets[0];
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(`OnsetRate failed, grid offset will fall back to 0:`, msg);
+    }
+
     const result: AnalysisResponse = {
       type: "result",
       bpm: consensusBpm,
       beats,
-      // First detected beat marks the grid offset — chart's pathS=0 aligns
-      // to this moment in the audio timeline.
-      gridOffsetSec: beats.length > 0 ? beats[0] : 0,
+      // Grid offset = earliest beat-aligned time ≥ firstAudibleSec.
+      // RhythmExtractor2013 often misses the first real beat because its
+      // onset-detection front-end needs a few hundred ms to lock on. We
+      // back-extrapolate along the detected BPM grid from beats[0] until
+      // the next step would cross into pre-music silence. The beats[]
+      // array stays untouched — only the offset is corrected — so
+      // downstream consumers still see raw tracker output.
+      gridOffsetSec: firstGridBeat(beats, consensusBpm, firstAudibleSec),
       confidence: rhythm.confidence,
       bpmMultiFeature: rhythm.bpm,
       bpmPercival: percival.bpm,
       bpmEstimates,
       bpmIntervals,
+      firstAudibleSec,
     };
     self.postMessage(result);
   } catch (err) {
@@ -157,6 +182,34 @@ function vecToArray(v: VectorFloat): number[] {
   for (let i = 0; i < v.size(); i++) out[i] = v.get(i);
   return out;
 }
+
+// Earliest beat-aligned time given the tracker's detected beats, consensus
+// BPM, and a silence-derived lower bound on where real audio starts.
+//
+// Strategy:
+//   1. Back-extrapolate from beats[0] along 60/bpm steps, down to
+//      lowerBound. Handles the common tracker-warmup case where beats[0]
+//      is actually beat 2 or 3 of the song.
+//   2. If the back-extrapolated beat is still more than half a beat past
+//      lowerBound, the tracker's beat-grid phase is simply wrong (real
+//      beats don't align with 60/bpm spacing from beats[0]). In that case
+//      fall back to lowerBound — the first audible audio — as beat 1.
+//      This accepts up to a half-beat pickup/anacrusis offset but
+//      prevents the camera from sitting at pathS=0 through actual music.
+function firstGridBeat(
+  beats: readonly number[],
+  bpm: number,
+  lowerBound: number,
+): number {
+  if (beats.length === 0) return lowerBound;
+  if (bpm <= 0) return beats[0];
+  const interval = 60 / bpm;
+  let t = beats[0];
+  while (t - interval >= lowerBound) t -= interval;
+  if (t - lowerBound > interval * 0.5) return lowerBound;
+  return t;
+}
+
 
 // Consensus heuristic across algorithms. If multifeature is highly
 // confident, trust it. Otherwise check if Percival agrees with it or with

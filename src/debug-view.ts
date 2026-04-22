@@ -92,6 +92,17 @@ export class DebugView {
     return this.orthoCamera;
   }
 
+  // Registers additional bboxes after construction. Used by the rolling
+  // section generator so each new straight's group + barriers show up on
+  // the debug overlay as they're built.
+  addBboxes(bboxes: readonly DebugBbox[]): void {
+    for (const b of bboxes) {
+      const helper = new THREE.Box3Helper(b.box, b.color ?? COLOR_OBJECT_BOX);
+      helper.layers.set(HELPER_LAYER);
+      this.helpers.add(helper);
+    }
+  }
+
   updatePlayerBox(pos: THREE.Vector3): void {
     this.playerBox.min.set(
       pos.x - PLAYER_BBOX_HALF,

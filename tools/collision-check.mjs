@@ -23,6 +23,12 @@ try {
   await page.waitForFunction(() => window.__getChart !== undefined, {
     timeout: 5_000,
   });
+  // Wait for audio analysis so currentForwardSpeed reflects the detected
+  // BPM before __getGateTimesMs() is read. Without this the test races the
+  // speed change and timings go stale mid-wait.
+  await page.waitForFunction(() => window.__getSongAnalysis?.() !== null, {
+    timeout: 30_000,
+  });
 
   // Dismiss the title overlay and enable motion.
   await page.evaluate(() => window.__startGame());

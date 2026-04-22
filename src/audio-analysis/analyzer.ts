@@ -15,6 +15,7 @@ export interface SongAnalysis {
   readonly bpmPercival: number;
   readonly bpmEstimates: readonly number[];
   readonly bpmIntervals: readonly number[];
+  readonly firstAudibleSec: number;
 }
 
 export interface AnalysisProgress {
@@ -61,6 +62,7 @@ export async function analyzeAudio(
             bpmPercival: number;
             bpmEstimates: readonly number[];
             bpmIntervals: readonly number[];
+            firstAudibleSec: number;
           }
         | { type: "error"; message: string };
       if (msg.type === "progress") {
@@ -76,6 +78,7 @@ export async function analyzeAudio(
           bpmPercival: msg.bpmPercival,
           bpmEstimates: msg.bpmEstimates,
           bpmIntervals: msg.bpmIntervals,
+          firstAudibleSec: msg.firstAudibleSec,
         });
       } else if (msg.type === "error") {
         worker.terminate();

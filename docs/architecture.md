@@ -24,20 +24,14 @@ src/
 
 ## Corridor path model
 
-`src/corridor.ts`. The corridor is parameterized by a scalar `s` (distance traveled in world units since spawn). Each frame the game calls `samplePath(pathS)` → `{pos, yaw}` and writes those to the camera.
+`src/corridor.ts`. The corridor is an ordered list of **sections** (straights and turns) appended on demand as the camera advances. Each frame the game calls `samplePath(sections, pathS)` → `{pos, yaw}` and writes those to the camera.
 
-- **Straight 1** (0 ≤ s ≤ `STRAIGHT_LENGTH`): `pos = (0, 0, CAMERA_START.z − s)`, yaw = 0.
-- **Right-turn arc** (inside the corridor's fixed radius `TURN_RADIUS`, ¼ circle): `yaw = −t·π/2`, position on arc.
-- **Straight 2** (after turn): `pos` in world +X direction, yaw = −π/2.
-- Past the end: wraps back to `s=0` via modulo of `PATH_TOTAL`. Wrap frames skip collision (see below).
+- **Section types**: `StraightSection { position, yaw, length }` and `TurnSection { center, radius, startYaw, direction, length }`. Straights carry gameplay (tunnel cubes + gates); turns are empty transitions (plan §2 "no gates at turns").
+- **Sampling**: `samplePath` linearly scans for the section owning `pathS`, converts to local offset, and returns the world pose. For turns, the (center → camera) vector rotates rigidly with yaw around +Y: `pos = center + R · direction · (−cos(yaw), 0, sin(yaw))`.
+- **Rolling generation** (`ensureSectionsAhead(pathS)` in `main.ts`): appends straight → turn → straight → turn while the last section's end is closer than `SECTION_LOOKAHEAD` (120 units) past the camera. Turn direction alternates right/left per turn so the corridor zig-zags instead of closing into a 4-section square. Called each frame and from `__setPathS` so tests that jump the camera forward don't run off the built corridor.
+- **No wrap**: `pathS` is monotonic. The song ending (via `audioSource.onended`) is what bounds a run.
 
-`STRAIGHT_LENGTH = CAMERA_START.z + TUNNEL_DEPTH` (= 42 units). Approach + tunnel.
-
-Two scalars are tracked in `main.ts`:
-- `pathS` — current sample coord, wrapped to `[0, PATH_TOTAL)`. Used for `samplePath()`.
-- `totalPathS` — monotonic distance traveled since respawn. Used to detect loop wraps via floor-division.
-
-Wrap detection: `Math.floor(totalPathS / PATH_TOTAL) !== Math.floor(prevTotal / PATH_TOTAL)`. Robust to multi-wrap frames (rare but real under browser-throttled tabs).
+`STRAIGHT_LENGTH = TUNNEL_DEPTH × CELL` (= 40 units). Uniform across all straights — `CAMERA_START.z = 0` removed the 2-unit approach that used to live on the first straight and complicate beat math.
 
 ## Game state machine
 
@@ -49,6 +43,8 @@ Plain flags in `main.ts`, no formal state machine class:
 | `dead` | player hit a barrier; pathS frozen at hit point |
 | `invincible` | collision detection skipped entirely (I key toggle) |
 | `motionScale` | test-only scalar multiplied into wall-clock advance fallback |
+
+There's no `totalPathS` anymore — `pathS` itself is monotonic because the corridor doesn't loop.
 
 Transitions:
 
@@ -92,16 +88,15 @@ Gate density knob: `BEATS_PER_GATE` in `constants.ts`. Derives `GATE_COUNT = BEA
 scene
 ├── DirectionalLight  (raking key)
 ├── AmbientLight      (very low — plan §5)
-├── straight1Group    (no transform; local = world)
+├── straight-0 group  (position+yaw from its StraightSection)
 │   ├── tunnel.object (merged Mesh + LineSegments2)
 │   └── gates.object  (merged transparent Mesh + LineSegments2)
-├── straight2Group    (position=(TURN_RADIUS, 0, −STRAIGHT_LENGTH−TURN_RADIUS), rotation.y=−π/2)
-│   └── ...same as straight1
-├── DebugView.helpers (Box3Helpers for straight bboxes + player bbox)
-└── cubeBboxLines     (merged LineSegments of per-cube OBBs, layer 1)
+├── straight-1 group  (...)
+├── …                 (added dynamically as ensureSectionsAhead runs)
+└── DebugView.helpers (Box3Helpers for each straight + barriers + player, layer 1)
 ```
 
-Both straight groups are built from identical `createTunnel()` + `createGates(slots)`; world placement comes entirely from the parent group's transform. Collision checks transform the camera's world prev/curr into each straight's local space via `group.worldToLocal`.
+Each straight group is built from identical `createTunnel()` + `createGates(slots)`; world placement comes entirely from the group's `position`/`rotation.y` set from the matching `StraightSection`. Collision iterates `straightObjects[]` (parallel to `sections[]`, with `null` for turn indices) and transforms the camera's world prev/curr into each straight's local space via `group.worldToLocal`.
 
 ## Audio pipeline
 
@@ -130,8 +125,8 @@ fetch(url) ──────────►  ArrayBuffer
 ```
 
 - `main.ts` holds `audioCtx`, `audioBuffer` (native rate), `audioSource` (current playback node), `audioStartTime`, `currentGridOffsetSec`.
-- **Audio clock** drives pathS in real play: `audioNow = audioCtx.currentTime − audioStartTime − gridOffsetSec`, `pathS = max(0, audioNow × FORWARD_SPEED)`. During intro (negative audioNow) pathS is clamped to 0 — camera waits at spawn through silence.
-- **Wall-clock fallback**: when no audio playing (tests), `pathS += FORWARD_SPEED × motionScale × dt`. Tests set `motionScale=0` to freeze.
+- **Audio clock** drives pathS in real play: `audioNow = audioCtx.currentTime − audioStartTime − gridOffsetSec`, `pathS = max(0, audioNow × currentForwardSpeed)`. During intro (negative audioNow) pathS is clamped to 0 — camera waits at spawn through silence. `currentForwardSpeed = forwardSpeedForBpm(bpm)` after analysis; default `FORWARD_SPEED` before.
+- **Wall-clock fallback**: when no audio playing (tests), `pathS += currentForwardSpeed × motionScale × dt`. Tests set `motionScale=0` to freeze.
 - **Drag-drop**: drop-zone handler calls `loadAndAnalyzeSource(file, file.name)` → same analyzer path as the auto-load. Generation counter (`analysisGen`) ensures racing loads don't clobber each other.
 - **Autoplay policy**: `startAudio()` is called synchronously inside a click handler so Chromium accepts the gesture. AudioContext is `.resume()`-ed inside the same call chain.
 
@@ -160,7 +155,7 @@ Interactions (all gated on `active`):
 - mousewheel → zooms the orthographic camera's `.zoom`
 - right-mouse drag → pans `orthoCamera.position.x/z` (calls `stopPropagation` on mousemove so PlayerController doesn't see the drag)
 
-Bboxes built once at init from `straight.group.matrixWorld` + per-barrier/per-cube local transforms. Player bbox mutates its `Box3.min/max` each frame (Box3Helper picks that up via its `updateMatrixWorld`).
+Bboxes are registered incrementally via `debugView.addBboxes(...)` — each new straight calls it as it's appended. Player bbox mutates its `Box3.min/max` each frame (Box3Helper picks that up via its `updateMatrixWorld`). Per-cube OBB lines were dropped when the corridor went rolling — they would have needed re-merging each time a section was appended, not worth the complexity for a debug visual.
 
 ## Collision (`src/collision.ts`)
 
@@ -172,7 +167,7 @@ if (prevLocal.z > gate.z && currLocal.z <= gate.z) {
 }
 ```
 
-`main.ts` iterates both straights, transforming camera world-space prev/curr into each straight's local space via `group.worldToLocal`. Wrap frames skip collision entirely (otherwise the teleport from end-of-corridor to spawn would trace a straight line through many gate planes at weird slots, triggering false positives).
+`main.ts` iterates all currently-built straights in `straightObjects[]` (skipping `null` turn slots), transforming camera world-space prev/curr into each straight's local space via `group.worldToLocal`. Collision runs every frame — no wrap to guard against.
 
 ## Title + BYOM UI
 
