@@ -13,7 +13,7 @@ npm run dev
 
 Then open http://localhost:5173 and either drop an mp3 onto the title screen or click to browse. Analysis takes ~15s the first time you load a track; results are cached in `localStorage`, so reloads are instant.
 
-A `dev-song.mp3` placed in `public/` (gitignored) auto-loads on boot for development convenience.
+A `dev-song.mp3` placed in `public/music/` (gitignored) auto-loads on boot for development convenience. An optional `dev-song.mp3.analysis.json` sidecar in the same folder skips the ~15s first-load analysis.
 
 ## Controls
 

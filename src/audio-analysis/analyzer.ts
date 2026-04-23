@@ -1,6 +1,14 @@
 // Main-thread API for audio analysis. Spawns the Essentia.js worker,
 // streams progress, and resolves with the analyzed rhythm.
 
+import {
+  windowDurationSecForBpm,
+  windowsFromFramewise,
+} from "./framewise";
+import type { FramewiseFeatures } from "./analyzer-worker";
+
+export type { FramewiseFeatures } from "./analyzer-worker";
+
 export interface WindowFeature {
   readonly startSec: number;
   readonly loudness: number;
@@ -45,12 +53,19 @@ export interface SongAnalysis {
   readonly bpmEstimates: readonly number[];
   readonly bpmIntervals: readonly number[];
   readonly firstAudibleSec: number;
+  // Per-window features at the current bpm/gridOffsetSec — derived
+  // from `framewise` via the framewise.ts aggregator. Recomputed on
+  // every recompute path; consumers can also re-derive on demand.
   readonly windowFeatures: readonly WindowFeature[];
   readonly windowDurationSec: number;
-  // Detected sections — derived from windowFeatures via detectSections().
-  // Cached on the analysis result so consumers don't have to rerun the
-  // detector. Re-run with different options if you want to experiment.
+  // Detected sections — produced by detectSections(windowFeatures, bpm).
   readonly sections: readonly Section[];
+  // Per-frame prefix-summed features. The expensive Essentia work runs
+  // ONCE per song into this; all subsequent recomputes (editor save,
+  // beat sync) re-derive windowFeatures from this in pure JS without
+  // touching the worker. Hot-path optimisation — see framewise.ts for
+  // the rationale.
+  readonly framewise: FramewiseFeatures;
 }
 
 export interface AnalysisProgress {
@@ -98,14 +113,22 @@ export async function analyzeAudio(
             bpmEstimates: readonly number[];
             bpmIntervals: readonly number[];
             firstAudibleSec: number;
-            windowFeatures: readonly WindowFeature[];
-            windowDurationSec: number;
+            framewise: FramewiseFeatures;
           }
         | { type: "error"; message: string };
       if (msg.type === "progress") {
         onProgress?.({ stage: msg.stage, progress: msg.progress });
       } else if (msg.type === "result") {
         worker.terminate();
+        // Derive per-window features + sections from the framewise
+        // prefix sums. This runs in pure JS on the main thread —
+        // sub-millisecond. The worker's job is just to produce
+        // framewise; everything downstream is cheap re-aggregation.
+        const windowFeatures = windowsFromFramewise(
+          msg.framewise,
+          msg.bpm,
+          msg.gridOffsetSec,
+        );
         resolve({
           bpm: msg.bpm,
           beats: msg.beats,
@@ -116,9 +139,10 @@ export async function analyzeAudio(
           bpmEstimates: msg.bpmEstimates,
           bpmIntervals: msg.bpmIntervals,
           firstAudibleSec: msg.firstAudibleSec,
-          windowFeatures: msg.windowFeatures,
-          windowDurationSec: msg.windowDurationSec,
-          sections: detectSections(msg.windowFeatures, msg.bpm),
+          windowFeatures,
+          windowDurationSec: windowDurationSecForBpm(msg.bpm),
+          sections: detectSections(windowFeatures, msg.bpm),
+          framewise: msg.framewise,
         });
       } else if (msg.type === "error") {
         worker.terminate();
@@ -141,81 +165,22 @@ export async function analyzeAudio(
   });
 }
 
-// Re-derive per-window features at a NEW gridOffset / bpm and run
-// section detection on top. Used by the track editor's save path when
-// the user has corrected bpm or gridOffset — the existing
-// windowFeatures were measured at the old grid and would silently
-// misalign with the new beat origin.
-//
-// Skips the heavy analyze pipeline (RhythmExtractor, Percival,
-// OnsetRate) — those outputs aren't affected by the user's edits and
-// re-running them would add ~10–15s for nothing. The compute-windows
-// worker path is roughly the duration of the per-window Essentia loop,
-// typically 1–3 seconds for a multi-minute track.
-export async function recomputeSections(
-  buffer: AudioBuffer,
+// Re-derives windowFeatures + sections at a new (bpm, gridOffsetSec)
+// from cached framewise prefix sums. Sub-ms; no worker round-trip.
+export function recomputeSectionsFromFramewise(
+  framewise: FramewiseFeatures,
   bpm: number,
   gridOffsetSec: number,
-): Promise<{
-  windowFeatures: readonly WindowFeature[];
+): {
+  windowFeatures: WindowFeature[];
   windowDurationSec: number;
   sections: Section[];
-}> {
-  const worker = new Worker(
-    new URL("./analyzer-worker.ts", import.meta.url),
-    { type: "module" },
-  );
-
-  const analysisBuffer =
-    buffer.sampleRate === ANALYSIS_SAMPLE_RATE
-      ? buffer
-      : await resampleBuffer(buffer, ANALYSIS_SAMPLE_RATE);
-  const mono = mixToMono(analysisBuffer);
-
-  const result = await new Promise<{
-    windowFeatures: readonly WindowFeature[];
-    windowDurationSec: number;
-  }>((resolve, reject) => {
-    worker.onmessage = (e: MessageEvent) => {
-      const msg = e.data as
-        | {
-            type: "windows-result";
-            windowFeatures: readonly WindowFeature[];
-            windowDurationSec: number;
-          }
-        | { type: "error"; message: string }
-        | { type: "progress"; stage: string; progress: number };
-      if (msg.type === "windows-result") {
-        worker.terminate();
-        resolve({
-          windowFeatures: msg.windowFeatures,
-          windowDurationSec: msg.windowDurationSec,
-        });
-      } else if (msg.type === "error") {
-        worker.terminate();
-        reject(new Error(msg.message));
-      }
-    };
-    worker.onerror = (e: ErrorEvent) => {
-      worker.terminate();
-      reject(new Error(e.message || "worker error"));
-    };
-    worker.postMessage(
-      {
-        type: "compute-windows",
-        channelData: mono,
-        sampleRate: analysisBuffer.sampleRate,
-        bpm,
-        gridOffsetSec,
-      },
-      [mono.buffer],
-    );
-  });
-
+} {
+  const windowFeatures = windowsFromFramewise(framewise, bpm, gridOffsetSec);
   return {
-    windowFeatures: result.windowFeatures,
-    windowDurationSec: result.windowDurationSec,
-    sections: detectSections(result.windowFeatures, bpm),
+    windowFeatures,
+    windowDurationSec: windowDurationSecForBpm(bpm),
+    sections: detectSections(windowFeatures, bpm),
   };
 }
 

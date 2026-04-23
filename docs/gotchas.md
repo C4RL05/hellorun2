@@ -140,7 +140,7 @@ The `.gitignore` from M1 has `*.mp3` (and `.wav`/`.ogg`/`.flac`/`.m4a`/`.aac`). 
 
 ## Vite `public/` serves files at root, but doesn't exist by default
 
-**Symptom**: `fetch('/dev-song.mp3')` returns 404; the `public/` folder isn't in `ls`.
+**Symptom**: `fetch('/music/dev-song.mp3')` returns 404; the `public/` folder isn't in `ls`.
 
 **Cause**: Vite's `public/` is a convention — if present, Vite auto-serves its contents at the site root; if absent, no 404, no folder. It's not created by default.
 

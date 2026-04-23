@@ -17,12 +17,14 @@ export interface SongMetadata {
   readonly gridOffsetSec: number;
 }
 
-// The single development song for milestone 6. Drop an mp3 at
-// `public/dev-song.mp3` (Vite serves it at `/dev-song.mp3`). Tune the
-// values below to match the actual track — 120 BPM + no offset is a
-// placeholder that won't align with an arbitrary file.
+// Built-in track. The mp3 lives at `public/music/dev-song.mp3` (Vite
+// serves it at `/music/dev-song.mp3`). A precomputed analysis sidecar
+// at `public/music/dev-song.mp3.analysis.json` lets first-time
+// visitors skip the ~15s analyze pass — see src/audio-analysis/
+// sidecar.ts for the format and the dev-tab "export analysis" button
+// for regenerating it.
 export const devSong: SongMetadata = {
-  url: "/dev-song.mp3",
+  url: "/music/dev-song.mp3",
   bpm: 120,
   gridOffsetSec: 0,
 };

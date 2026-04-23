@@ -143,6 +143,6 @@ Main is ~9 commits ahead of `origin/main` at time of last docs update.
 ## Non-obvious in-progress state
 
 If you're resuming and find uncommitted changes, check:
-- `src/songs.ts` — `devSong.url` points at whichever mp3 the user last tested (`/dev-song.mp3` or `/dev-120.mp3`). Both files are in `public/` (gitignored) if the user has them locally.
+- `src/songs.ts` — `devSong.url` points at the mp3 under `public/music/` (gitignored). Optional sibling `.analysis.json` sidecar skips the first-load analyze.
 - `src/constants.ts` — `BEATS_PER_GATE` default is `4` as of commit `99a5b32`; if the user is feel-testing they may have changed to 2 or 1.
 - `src/main.ts` — should have `loadAndAnalyzeSource` as the loader entry (post-drag-drop commit) or `loadAudio` (pre-drag-drop).

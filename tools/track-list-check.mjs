@@ -31,7 +31,7 @@ try {
   // user-origin track. Use a copy of the dev-song renamed so it has a
   // different hash (otherwise upsertTrack would just bump dev-song
   // active and we'd have only one row to inspect).
-  const mp3 = await readFile("public/dev-song.mp3");
+  const mp3 = await readFile("public/music/dev-song.mp3");
   // Append 1 byte so the hash differs from the cached dev-song.
   const buf = Buffer.concat([mp3, Buffer.from([0])]);
   await page.evaluate(async (b64) => {

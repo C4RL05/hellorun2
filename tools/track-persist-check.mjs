@@ -23,7 +23,7 @@ page.on("console", (m) => {
 });
 
 const dropMp3 = async () => {
-  const mp3 = await readFile("public/dev-song.mp3");
+  const mp3 = await readFile("public/music/dev-song.mp3");
   // Make a hash distinct from dev-song so we get a separate row.
   const buf = Buffer.concat([mp3, Buffer.from([0])]);
   const b64 = buf.toString("base64");

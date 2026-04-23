@@ -86,12 +86,21 @@ export class WaveformOverlay {
 
   // Called once the analyzer worker reports BPM + grid offset + sections.
   // Triggers a cache rebuild so phrase grid + per-section waveform color
-  // bake in together.
+  // bake in together. No-op if all three inputs match the cached state
+  // — sync clicks that happen to land on the existing gridOffset (or
+  // any back-to-back call with same args) skip the full canvas rebake.
   setSongStructure(
     bpm: number,
     gridOffsetSec: number,
     sections: readonly Section[] = [],
   ): void {
+    if (
+      this.bpm === bpm &&
+      this.gridOffsetSec === gridOffsetSec &&
+      this.sections === sections
+    ) {
+      return;
+    }
     this.bpm = bpm;
     this.gridOffsetSec = gridOffsetSec;
     this.sections = sections;

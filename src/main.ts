@@ -46,7 +46,10 @@ import {
   nextTurnAfter,
 } from "./corridor";
 import type { Section } from "./corridor";
-import { analyzeAudio, recomputeSections } from "./audio-analysis/analyzer";
+import {
+  analyzeAudio,
+  recomputeSectionsFromFramewise,
+} from "./audio-analysis/analyzer";
 import type {
   Section as AudioSection,
   SongAnalysis,
@@ -58,6 +61,11 @@ import {
   removeAnalysisFromCache,
   setCachedAnalysis,
 } from "./audio-analysis/cache";
+import {
+  downloadSidecar,
+  fetchSidecarText,
+  parseSidecar,
+} from "./audio-analysis/sidecar";
 import {
   deleteTrack as deleteStoredTrack,
   getTrackBytes,
@@ -259,6 +267,25 @@ function recolorStraightsFromAnalysis(): void {
   }
 }
 
+// Single landing point for a new SongAnalysis — initial load, editor
+// save, and beat-sync recompute all funnel through here so derived
+// state (forward speed, max loudness, corridor straight colors,
+// waveform overlay) stays in lockstep with songAnalysis itself.
+function commitAnalysisUpdate(
+  next: SongAnalysis,
+  gridOffsetSec: number,
+): void {
+  songAnalysis = next;
+  currentGridOffsetSec = gridOffsetSec;
+  currentForwardSpeed = forwardSpeedForBpm(next.bpm);
+  songMaxLoudness = next.sections.reduce(
+    (m, s) => Math.max(m, s.avgLoudness),
+    0,
+  );
+  recolorStraightsFromAnalysis();
+  waveform.setSongStructure(next.bpm, gridOffsetSec, next.sections);
+}
+
 function registerStraightDebugHelpers(obj: StraightObj): void {
   const bboxes: DebugBbox[] = [
     { box: new THREE.Box3().setFromObject(obj.group), color: COLOR_STRAIGHT_BOX },
@@ -417,6 +444,7 @@ let songAnalysis: SongAnalysis | null = null;
 // first analysis lands.
 let songMaxLoudness = 0;
 
+
 // Seed the corridor with enough sections to cover the lookahead before the
 // first frame renders. ensureSectionsAhead appends straights/turns until
 // there's headroom past the given pathS.
@@ -553,7 +581,9 @@ function removeUserTrack(hash: string): void {
   void deleteStoredTrack(hash).catch((err) =>
     console.warn("track delete failed:", err),
   );
-  removeAnalysisFromCache(hash);
+  void removeAnalysisFromCache(hash).catch((err) =>
+    console.warn("analysis cache delete failed:", err),
+  );
 }
 
 function renderTrackList(): void {
@@ -683,6 +713,14 @@ async function loadAndAnalyzeSource(
 
   try {
     setSubtitle(`loading ${label}…`);
+    // Kick off sidecar fetch ASAP for built-ins — it overlaps the
+    // audio download + hash compute below. The hash is only needed at
+    // validate time after both have landed.
+    const sidecarTextPromise =
+      origin === "builtin" && typeof source === "string"
+        ? fetchSidecarText(source)
+        : Promise.resolve(null);
+
     let arr: ArrayBuffer;
     if (source instanceof ArrayBuffer) {
       arr = source;
@@ -695,7 +733,24 @@ async function loadAndAnalyzeSource(
     // Hash before decode — decodeAudioData detaches the ArrayBuffer in
     // Chromium, after which the bytes are unreadable.
     const hash = await hashArrayBuffer(arr);
-    const cached = getCachedAnalysis(hash);
+    let cached = await getCachedAnalysis(hash);
+    // Sidecar fallback for built-ins: if IDB missed (first visit /
+    // cache cleared), use the in-flight sidecar fetch. A successful
+    // sidecar populates IDB so the second load goes straight to cache.
+    if (!cached) {
+      const sidecarText = await sidecarTextPromise;
+      if (sidecarText) {
+        const sidecar = parseSidecar(sidecarText, hash);
+        if (sidecar) {
+          cached = sidecar;
+          await setCachedAnalysis(hash, sidecar);
+          console.log(
+            `loaded analysis from sidecar for ${label} ` +
+              `(skipped ~15s worker pass)`,
+          );
+        }
+      }
+    }
 
     // Add the row to the music-tab list as soon as we have a hash, with
     // status "loading". Subsequent stage transitions update it in
@@ -751,7 +806,7 @@ async function loadAndAnalyzeSource(
       } finally {
         clearInterval(tickInterval);
       }
-      setCachedAnalysis(hash, result);
+      await setCachedAnalysis(hash, result);
     }
 
     // If the user × the row mid-analysis, bail without further mutation
@@ -799,15 +854,7 @@ async function loadAndAnalyzeSource(
     stopAudio();
     audioBuffer = localAudioBuffer;
     waveform.setAudioBuffer(localAudioBuffer);
-    songAnalysis = result;
-    currentGridOffsetSec = result.gridOffsetSec;
-    currentForwardSpeed = forwardSpeedForBpm(result.bpm);
-    songMaxLoudness = result.sections.reduce(
-      (m, s) => Math.max(m, s.avgLoudness),
-      0,
-    );
-    recolorStraightsFromAnalysis();
-    waveform.setSongStructure(result.bpm, result.gridOffsetSec, result.sections);
+    commitAnalysisUpdate(result, result.gridOffsetSec);
     setSubtitle("click to start");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -927,9 +974,31 @@ titleOverlay?.addEventListener("click", () => {
 });
 
 document.getElementById("dev-clear-cache")?.addEventListener("click", () => {
-  const removed = clearAnalysisCache();
-  console.log(`cleared ${removed} cached analysis entr${removed === 1 ? "y" : "ies"}`);
+  void clearAnalysisCache().then((removed) => {
+    console.log(
+      `cleared ${removed} cached analysis entr${removed === 1 ? "y" : "ies"}`,
+    );
+  });
 });
+
+// Export the active track's analysis as a sidecar JSON for shipping
+// next to the mp3. Drop the downloaded file in `public/` (same name
+// as the mp3, with `.analysis.json` appended) and first-time visitors
+// will skip the ~15s worker pass.
+document
+  .getElementById("dev-export-analysis")
+  ?.addEventListener("click", () => {
+    if (!songAnalysis || !activeTrackHash) {
+      console.warn("no active track analysis to export");
+      return;
+    }
+    const track = tracks.find((t) => t.hash === activeTrackHash);
+    if (!track) return;
+    downloadSidecar(songAnalysis, activeTrackHash, track.name);
+    console.log(
+      `exported sidecar for ${track.name} — drop in public/ next to the mp3`,
+    );
+  });
 
 // User menu (top-right hamburger). Always available; the `dev` tab and
 // any element marked `data-dev-only` are pruned in production builds.
@@ -1066,7 +1135,7 @@ function isAudioFile(f: File): boolean {
 // this so __getSongAnalysis() has something to return. Drop a different
 // file to replace. Marked builtin so it appears in the music tab list
 // without a delete affordance.
-void loadAndAnalyzeSource(devSong.url, devSong.url.replace(/^\//, ""), "builtin");
+void loadAndAnalyzeSource(devSong.url, devSong.url.split("/").pop() ?? "dev-song.mp3", "builtin");
 
 // Restore previously-uploaded user tracks from IndexedDB. Only the
 // metadata is read at boot — bytes stay on disk until the user clicks a
@@ -1173,15 +1242,14 @@ async function openEditorForTrack(hash: string): Promise<void> {
 // Persist edits + apply to live state. Cache (localStorage) and IDB
 // metadata both get updated; if editing the active track we also patch
 // the in-memory songAnalysis so the next sync/respawn picks up the new
-// values immediately. When bpm or gridOffset changed materially, runs
-// a worker round-trip to recompute window features + sections at the
-// new beat grid (~1–3s on a multi-min track) — otherwise the cached
-// `windowFeatures` would silently misalign with the new offset.
+// values immediately. When bpm or gridOffset changed materially,
+// re-derives windowFeatures + sections from the cached framewise
+// prefix sums (sub-ms, no worker round-trip).
 async function applyEditorSave(
   hash: string,
   patch: TrackEditPatch,
 ): Promise<void> {
-  const cached = getCachedAnalysis(hash);
+  const cached = await getCachedAnalysis(hash);
   if (!cached) return;
 
   const bpmChanged = Math.abs(cached.bpm - patch.bpm) > 1e-3;
@@ -1193,37 +1261,31 @@ async function applyEditorSave(
     gridOffsetSec: patch.gridOffsetSec,
   };
 
-  // Recompute sections only when the beat grid actually moved AND we
-  // have the audio in memory. Editor-open already auto-loads non-active
-  // tracks via playTrack, so audioBuffer should match the edited hash
-  // here. If for some reason it doesn't, we just persist the bpm/grid
-  // change without resectioning (sections will look slightly off until
-  // a full re-analyze).
-  if ((bpmChanged || gridChanged) && audioBuffer && hash === activeTrackHash) {
-    try {
-      const recomputed = await recomputeSections(
-        audioBuffer,
-        patch.bpm,
-        patch.gridOffsetSec,
-      );
-      updated = {
-        ...updated,
-        windowFeatures: recomputed.windowFeatures,
-        windowDurationSec: recomputed.windowDurationSec,
-        sections: recomputed.sections,
-      };
-      console.log(
-        `re-detected sections at bpm=${patch.bpm.toFixed(2)} ` +
-          `gridOffset=${patch.gridOffsetSec.toFixed(3)}: ` +
-          `${recomputed.sections.length} sections, ` +
-          `${new Set(recomputed.sections.map((s) => s.kind)).size} kinds`,
-      );
-    } catch (err) {
-      console.warn("section recompute failed; persisting bpm/grid only:", err);
-    }
+  // Recompute sections at the new beat grid via the cached framewise
+  // prefix sums — pure-JS aggregation, sub-millisecond. Skipped when
+  // the change is below numeric noise (no point churning sections for
+  // a 0.0001 bpm tweak).
+  if (bpmChanged || gridChanged) {
+    const recomputed = recomputeSectionsFromFramewise(
+      cached.framewise,
+      patch.bpm,
+      patch.gridOffsetSec,
+    );
+    updated = {
+      ...updated,
+      windowFeatures: recomputed.windowFeatures,
+      windowDurationSec: recomputed.windowDurationSec,
+      sections: recomputed.sections,
+    };
+    console.log(
+      `re-detected sections at bpm=${patch.bpm.toFixed(2)} ` +
+        `gridOffset=${patch.gridOffsetSec.toFixed(3)}: ` +
+        `${recomputed.sections.length} sections, ` +
+        `${new Set(recomputed.sections.map((s) => s.kind)).size} kinds`,
+    );
   }
 
-  setCachedAnalysis(hash, updated);
+  await setCachedAnalysis(hash, updated);
 
   // Update the in-memory list row's bpm so the music tab shows the
   // corrected value (durationSec unchanged).
@@ -1261,15 +1323,7 @@ async function applyEditorSave(
   // it play with the corrected values, or LMB-syncs to lock alignment
   // from the current moment.
   if (hash === activeTrackHash) {
-    songAnalysis = updated;
-    currentGridOffsetSec = patch.gridOffsetSec;
-    currentForwardSpeed = forwardSpeedForBpm(patch.bpm);
-    songMaxLoudness = updated.sections.reduce(
-      (m, s) => Math.max(m, s.avgLoudness),
-      0,
-    );
-    recolorStraightsFromAnalysis();
-    waveform.setSongStructure(patch.bpm, patch.gridOffsetSec, updated.sections);
+    commitAnalysisUpdate(updated, patch.gridOffsetSec);
   }
 }
 
@@ -1290,7 +1344,7 @@ async function playTrack(hash: string): Promise<void> {
   if (track.origin === "builtin") {
     void loadAndAnalyzeSource(
       devSong.url,
-      devSong.url.replace(/^\//, ""),
+      devSong.url.split("/").pop() ?? "dev-song.mp3",
       "builtin",
     );
     return;
@@ -1626,58 +1680,25 @@ function syncFromCurrentMoment(): void {
   camera.rotation.y = pose.yaw;
   prevWorldPos.copy(camera.position);
 
-  // Re-render waveform's phrase-grid lines from the new offset.
-  if (songAnalysis) {
-    waveform.setSongStructure(
+  // Re-detect sections at the new beat grid using the cached
+  // framewise prefix sums — instant (sub-ms). commitAnalysisUpdate
+  // also redraws the waveform structure, so no separate redraw call
+  // is needed first.
+  if (songAnalysis && audioBuffer) {
+    const recomputed = recomputeSectionsFromFramewise(
+      songAnalysis.framewise,
       songAnalysis.bpm,
       currentGridOffsetSec,
-      songAnalysis.sections,
     );
-  }
-
-  // Kick off background section recompute so palette/density boundaries
-  // realign to the new beat grid (the existing sections are still
-  // content-correct via absolute song-time lookup, but their boundaries
-  // were placed at OLD-grid 16-beat marks). Non-blocking: corridor
-  // renders immediately with old sections; updated sections snap in
-  // ~1–3s once the worker round-trip lands and recolorStraightsFrom-
-  // Analysis updates already-built straights in place.
-  void recomputeSectionsAfterSync();
-}
-
-// Generation counter: bumps on every sync so a rapid second sync click
-// invalidates the in-flight recompute from the first.
-let syncRecomputeGen = 0;
-
-async function recomputeSectionsAfterSync(): Promise<void> {
-  if (!audioBuffer || !songAnalysis || !activeTrackHash) return;
-  const gen = ++syncRecomputeGen;
-  const hash = activeTrackHash;
-  const bpm = songAnalysis.bpm;
-  const gridOffset = currentGridOffsetSec;
-  try {
-    const recomputed = await recomputeSections(audioBuffer, bpm, gridOffset);
-    // Stale check: another sync (or track swap) superseded this run.
-    if (gen !== syncRecomputeGen) return;
-    if (hash !== activeTrackHash || !songAnalysis) return;
-    songAnalysis = {
-      ...songAnalysis,
-      windowFeatures: recomputed.windowFeatures,
-      windowDurationSec: recomputed.windowDurationSec,
-      sections: recomputed.sections,
-    };
-    songMaxLoudness = recomputed.sections.reduce(
-      (m, s) => Math.max(m, s.avgLoudness),
-      0,
+    commitAnalysisUpdate(
+      {
+        ...songAnalysis,
+        windowFeatures: recomputed.windowFeatures,
+        windowDurationSec: recomputed.windowDurationSec,
+        sections: recomputed.sections,
+      },
+      currentGridOffsetSec,
     );
-    recolorStraightsFromAnalysis();
-    waveform.setSongStructure(bpm, gridOffset, recomputed.sections);
-    console.log(
-      `sync section recompute: ${recomputed.sections.length} sections, ` +
-        `${new Set(recomputed.sections.map((s) => s.kind)).size} kinds`,
-    );
-  } catch (err) {
-    console.warn("sync section recompute failed:", err);
   }
 }
 
