@@ -185,3 +185,24 @@ if (TUNNEL_WIDTH % 2 === 0 || TUNNEL_HEIGHT % 2 === 0) {
 export function forwardSpeedForBpm(bpm: number): number {
   return (GATE_SPACING * bpm) / (BEATS_PER_GATE * 60);
 }
+
+// Game-over effects (see docs/game-over-rewind-and-vinyl-audio.md).
+//
+// Camera "rewind": on death, the camera drifts backward along the path —
+// initial recoil (RECOIL_SPEED) eases toward a small idle drift
+// (DRIFT_SPEED) at exponential rate EASE_RATE. Both speeds are world u/s
+// signed (negative = backward). Tuned relative to FORWARD_SPEED so the
+// recoil reads as roughly half the forward speed and the drift is a slow
+// continuous backward float. pathS is clamped at 0 since the corridor is
+// monotonic — no wrap.
+export const DEATH_REWIND_RECOIL_SPEED = -5;
+export const DEATH_REWIND_DRIFT_SPEED = -1;
+export const DEATH_REWIND_EASE_RATE = 2;
+
+// Vinyl stop: on death, the audio source's playbackRate is ramped down
+// linearly at RAMP_PER_SEC units/sec. When the rate falls below
+// CUT_THRESHOLD the source is stopped (cutting at exactly 0 can produce
+// clicks / DC offset). Default is a ~1s slowdown — set RAMP_PER_SEC to
+// 0.5 for ~2s ("more tired"), 2.0 for ~0.5s ("snappier glitch").
+export const DEATH_VINYL_RAMP_PER_SEC = 1.0;
+export const DEATH_VINYL_CUT_THRESHOLD = 0.01;

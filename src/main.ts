@@ -15,6 +15,11 @@ import {
   CELL,
   COLOR_BACKGROUND,
   COLOR_EDGE,
+  DEATH_REWIND_DRIFT_SPEED,
+  DEATH_REWIND_EASE_RATE,
+  DEATH_REWIND_RECOIL_SPEED,
+  DEATH_VINYL_CUT_THRESHOLD,
+  DEATH_VINYL_RAMP_PER_SEC,
   FIRST_GATE_Z,
   FORWARD_SPEED,
   GATE_COUNT,
@@ -416,6 +421,12 @@ let dead = false;
 let pathS = 0;
 let motionScale = 1;
 let invincible = false;
+// Game-over rewind/vinyl state. While `dead`, the death branch in the
+// animation loop integrates `deathRewindSpeed` into pathS (eases toward
+// DEATH_REWIND_DRIFT_SPEED) and ramps `audioSource.playbackRate` down
+// when `vinylStopping` is true. Both are reset by resetToSpawn.
+let deathRewindSpeed = 0;
+let vinylStopping = false;
 // Plan §1: "A run = a song. Game starts when the song starts, ends when
 // the song ends (or the player dies)." `running` gates pathS advancement
 // so nothing moves until the user clicks the title screen.
@@ -799,6 +810,12 @@ const resetToSpawn = () => {
   pathS = 0;
   player.reset();
   dead = false;
+  // Clear any in-flight game-over rewind/vinyl state. Respawn / RMB
+  // continue / waveform seek call this before creating a fresh
+  // AudioBufferSourceNode (which arrives at playbackRate=1 by default),
+  // so the next death starts the rewind from a clean baseline.
+  deathRewindSpeed = 0;
+  vinylStopping = false;
   const pose = samplePath(sections, 0);
   camera.position.copy(pose.pos);
   camera.rotation.set(0, pose.yaw, 0);
@@ -910,6 +927,29 @@ renderer.setAnimationLoop(() => {
     }
     ensureSectionsAhead(pathS);
     placeMarkersUpTo(pathS + SECTION_LOOKAHEAD);
+  } else if (running && dead) {
+    // Game-over: rewind controller drives pathS backward instead of
+    // freezing it. Initial recoil eases toward a slow residual drift
+    // (framerate-independent exponential ease, same shape as the player
+    // input pipeline). Clamped at 0 — the corridor doesn't wrap.
+    pathS = Math.max(0, pathS + deathRewindSpeed * dt);
+    const ease = 1 - Math.exp(-DEATH_REWIND_EASE_RATE * dt);
+    deathRewindSpeed += (DEATH_REWIND_DRIFT_SPEED - deathRewindSpeed) * ease;
+
+    // Vinyl stop: ramp playbackRate down each frame; stop the source
+    // once it's nearly inaudible. The fresh source created by respawn /
+    // RMB-continue / waveform-seek implicitly aborts this (the old
+    // source is gone before the ramp can mutate it again).
+    if (vinylStopping && audioSource) {
+      const next =
+        audioSource.playbackRate.value - DEATH_VINYL_RAMP_PER_SEC * dt;
+      if (next < DEATH_VINYL_CUT_THRESHOLD) {
+        stopAudio();
+        vinylStopping = false;
+      } else {
+        audioSource.playbackRate.value = next;
+      }
+    }
   }
 
   const pose = samplePath(sections, pathS);
@@ -920,7 +960,18 @@ renderer.setAnimationLoop(() => {
     const hit = collisionAcrossStraights(prevWorldPos, camera.position);
     if (hit) {
       dead = true;
-      stopAudio();
+      // Hand pathS over to the rewind controller (camera drifts back
+      // along the path with an initial recoil that eases to a slow
+      // residual drift). See docs/game-over-rewind-and-vinyl-audio.md.
+      deathRewindSpeed = DEATH_REWIND_RECOIL_SPEED;
+      // Vinyl stop: keep the source playing but ramp playbackRate down
+      // each frame; stop it once below the cut threshold. Null onended
+      // so a buffer-end during the slowdown can't flip running=false
+      // mid-rewind.
+      if (audioSource) {
+        vinylStopping = true;
+        audioSource.onended = null;
+      }
       console.log(
         `GAME OVER — ${hit.straight} gate z=${hit.gate.z.toFixed(2)}, needed slot ${hit.gate.openSlot}, player in slot ${hit.playerSlot}. Press R or click to respawn.`,
       );
