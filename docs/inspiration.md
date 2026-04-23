@@ -7,7 +7,7 @@ Three lineages feed the design. Each contributes a distinct strand.
 ## 1. HelloRun (2013) — the direct ancestor
 
 - **Link**: https://helloenjoy.itch.io/hellorun
-- **Relation**: HelloRun 2 is a deliberate reimagining of the original HelloEnjoy project. Same core verb (auto-forward first-person runner), same aesthetic family (stark vector-adjacent visuals), same BYOM music-as-level premise.
+- **Relation**: HelloRun 2 is a deliberate reimagining of the original HelloEnjoy project. Same core verb (auto-forward first-person runner), same aesthetic family (stark vector-adjacent visuals), same music-as-level premise. **HelloRun 1 ships with a single bundled song — that is the only level.** HelloRun 2 opens the premise up.
 
 **What we keep from HelloRun:**
 - First-person, auto-forward. The player never controls throttle or steering.
@@ -15,10 +15,16 @@ Three lineages feed the design. Each contributes a distinct strand.
 - Minimalist UI. No HUD, no meters, no tutorial text — the corridor communicates everything.
 - Music-reactive visuals as a free aesthetic layer on top of gameplay.
 
-**What HelloRun 2 changes:**
-- The corridor is now **built from straights + 90° turns**, not a single endless tube. Turns create the "hard reveal" memorization beat (plan §2) that HelloRun's continuous corridor did not have.
-- Vertical-only movement between 3 gate slots, versus HelloRun's different movement vocabulary. This narrows the input surface to a single analog axis — the Super Hexagon lesson (below).
-- Procedural chart generation is driven by **analyzed song structure** (sections, BPM, energy), not just beat pulses. Gates fall on beats; density and palette shift on detected section boundaries.
+**What HelloRun 2 changes:** three big ones.
+
+1. **BYOM (bring your own music).** HR1 has exactly one song and that song is baked into the build. HR2 analyzes whatever audio the player drops in, so every track is a new run. No server, no uploads — analysis happens in the browser.
+2. **Full beat sync.** HR1's visuals pulse to the music but gameplay timing isn't locked to the beat grid. HR2 puts every gate, turn, and phrase boundary on detected beats — the audio clock drives the game clock.
+3. **Procedural chart generation.** HR2 builds the entire gate chart from analyzed song structure (BPM, phrase boundaries, energy, sections) — so the song's structure *becomes* the level's structure. HR1's obstacle layout is hand-authored for its one song.
+
+Two smaller shifts that fall out of the above:
+
+- **Corridor topology.** Built from straights + 90° turns rather than a single endless tube. Turns create the "hard reveal" memorization beat (plan §2) that HR1's continuous corridor did not have.
+- **Single-axis input.** Vertical-only movement between 3 gate slots narrows the input surface to one analog axis — the Super Hexagon lesson (below).
 
 ## 2. Star Wars Arcade (1983) — the trench run
 
@@ -50,7 +56,7 @@ Three lineages feed the design. Each contributes a distinct strand.
 
 | Strand | Contributes |
 |---|---|
-| HelloRun (2013) | Project continuity: auto-forward FP runner, BYOM, song=level, music-reactive visuals |
+| HelloRun (2013) | Project continuity: auto-forward FP runner, song=level, minimalist UI, music-reactive visuals |
 | Star Wars Arcade (1983) | Camera framing, vector aesthetic, corridor-only world, read-shapes-at-distance |
 | Super Hexagon (2012) | Single-axis input, one-hit death, pattern vocabulary as content, music-as-clock |
 
@@ -58,7 +64,7 @@ These are not alternatives — each owns a different layer of the design. When a
 
 - "Let's add a dash ability" → breaks the Super Hexagon constraint (one input, one decision).
 - "Let's let the player see around the corner" → breaks the Star Wars constraint (read-at-distance, hard reveal).
-- "Let's stream the audio from a service" → breaks the HelloRun constraint (BYOM, no server).
+- "Let's add a throttle so players can slow down at hard sections" → breaks the HelloRun constraint (auto-forward, no speed control).
 
 ## Related, not direct
 
