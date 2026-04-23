@@ -14,11 +14,15 @@ src/
 ├── player.ts                    — PlayerController: input → inputTarget → inputNow → camera.y
 ├── debug-view.ts                — top-down overlay: bboxes on layer 1, ortho camera
 ├── waveform.ts                  — 2D-canvas waveform overlay (top of screen)
-├── songs.ts                     — SongMetadata type + devSong default
+├── songs.ts                     — SongMetadata type + devSong default (points at /music/)
+├── track-storage.ts             — shared IndexedDB (track-meta + track-bytes + analysis-cache stores)
+├── track-editor.ts              — music editor modal: waveform + zoom/pan + BPM input + grid drag
 ├── audio-analysis/
 │   ├── analyzer.ts              — main-thread API + Section type + detectSections + clusterSections
-│   ├── analyzer-worker.ts       — Web Worker: BPM/grid + per-window Loudness/Centroid/HPCP chroma
-│   └── cache.ts                 — localStorage analysis cache (SHA-256 keyed)
+│   ├── analyzer-worker.ts       — Web Worker: BPM/grid + per-frame prefix-summed features
+│   ├── framewise.ts             — O(1) per-window aggregator from prefix-sum arrays
+│   ├── sidecar.ts               — JSON sidecar load/save for shipping precomputed analyses
+│   └── cache.ts                 — IDB analysis cache (SHA-256 keyed; uses track-storage's openDb)
 └── scene/
     ├── tunnel.ts                — cube-grid tunnel (merged geometry, per-cube jitter rotation)
     ├── gates.ts                 — 3-slot barriers + per-barrier metadata
@@ -105,59 +109,64 @@ Each straight group is built from identical `createTunnel()` + `createGates(slot
 
 ```
 fetch(url) / file.arrayBuffer ──►  ArrayBuffer
+                                    │ (built-ins also fire fetchSidecarText in parallel)
                                     │
                                     ├──► hashArrayBuffer (SHA-256)
                                     │       │
-                                    │       └──► getCachedAnalysis ──┐
-                                    │                                │
-                                    ▼                                │
-                              decodeAudioData                        │
-                              (native sample rate)                   │
-                                    │                                │
-                                    ▼                                │
-                              waveform.setAudioBuffer                │
-                                    │                                │
-                                    ▼                                │
-                              cache hit? ─yes─► use cached ─────────►│
-                                    │                                │
-                                    no                               │
-                                    ▼                                │
-                              resampleBuffer → 44100 Hz              │
-                                    │                                │
-                                    ▼                                │
-                              mixToMono (Float32Array)               │
-                                    │                                │
-                              Worker pipeline:                       │
-                              1. RhythmExtractor2013 → bpm, ticks    │
-                              2. PercivalBpmEstimator → cross-check  │
-                              3. OnsetRate → first onset (lower bound)
-                              4. Per-16-beat window features:        │
-                                 Loudness + SpectralCentroidTime +   │
-                                 (Windowing → Spectrum → SpectralPeaks → HPCP) avg
-                                    │                                │
-                                    ▼                                │
-                              SongAnalysis { bpm, beats[],           │
-                                gridOffsetSec, confidence,           │
-                                windowFeatures[], … }                │
-                                    │                                │
-                              setCachedAnalysis(hash, result)        │
-                                    │                                │
-                                    ▼ ◄──────────────────────────────┘
+                                    │       ├──► getCachedAnalysis (IDB) ──┐
+                                    │       │                              │
+                                    │       └──► parseSidecar (built-ins) ►│
+                                    ▼                                      │
+                              decodeAudioData                              │
+                              (native sample rate)                         │
+                                    │                                      │
+                                    ▼                                      │
+                              waveform.setAudioBuffer                      │
+                                    │                                      │
+                                    ▼                                      │
+                              cache or sidecar hit? ─yes─► use cached ────►│
+                                    │                                      │
+                                    no                                     │
+                                    ▼                                      │
+                              resampleBuffer → 44100 Hz                    │
+                                    │                                      │
+                                    ▼                                      │
+                              mixToMono (Float32Array)                     │
+                                    │                                      │
+                              Worker pipeline:                             │
+                              1. RhythmExtractor2013 → bpm, ticks          │
+                              2. PercivalBpmEstimator → cross-check        │
+                              3. OnsetRate → first onset (lower bound)     │
+                              4. Per-frame prefix sums (single pass):      │
+                                 mean-square, energy, energy×centroid,     │
+                                 12-bin chroma — each accumulated into     │
+                                 cumulative arrays of length numFrames+1   │
+                                    │                                      │
+                                    ▼                                      │
+                              SongAnalysis { bpm, beats[],                 │
+                                gridOffsetSec, confidence,                 │
+                                framewise: FramewiseFeatures, … }          │
+                                    │                                      │
+                              setCachedAnalysis(hash, result) → IDB        │
+                                    │                                      │
+                                    ▼ ◄────────────────────────────────────┘
+                              windowsFromFramewise(framewise, bpm, gridOffsetSec)
+                              (main thread, O(1) per window)
+                                    │
                               detectSections(windowFeatures, bpm)
-                              (main thread, pure function)
                                     │
                               clusterSections → kinds
                                     │
                                     ▼
-                              SongAnalysis.sections[]
-                                    │
-                                    ▼
-                              waveform.setSongStructure(bpm, gridOffsetSec, sections)
-                              currentForwardSpeed = forwardSpeedForBpm(bpm)
+                              commitAnalysisUpdate → in-memory songAnalysis
+                              + recolor straights + waveform.setSongStructure
+                              + currentForwardSpeed = forwardSpeedForBpm(bpm)
                                     │
                                     ▼
                               click to start → startAudio()
 ```
+
+The expensive Essentia work runs **once per song** — every subsequent recompute (editor save, beat-sync click) re-aggregates from the cached framewise prefix sums in sub-millisecond pure JS. See [framewise.ts](../src/audio-analysis/framewise.ts) for the algorithm.
 
 - `main.ts` holds `audioCtx`, `audioBuffer` (native rate), `audioSource` (current playback node), `audioStartTime`, `currentGridOffsetSec`.
 - **Audio clock** drives pathS in real play: `audioNow = audioCtx.currentTime − audioStartTime − gridOffsetSec`, `pathS = max(0, audioNow × currentForwardSpeed)`. During intro (negative audioNow) pathS is clamped to 0 — camera waits at spawn through silence. `currentForwardSpeed = forwardSpeedForBpm(bpm)` after analysis; default `FORWARD_SPEED` before.
@@ -169,12 +178,41 @@ fetch(url) / file.arrayBuffer ──►  ArrayBuffer
 
 ### Section detection (`src/audio-analysis/analyzer.ts`)
 
-Pure-JS post-processing on the worker's `windowFeatures[]`. Two passes:
+Pure-JS post-processing on `windowFeatures[]` (which is itself derived from `framewise` prefix sums via `windowsFromFramewise`). Two passes:
 
 1. **`detectSections(windowFeatures, bpm)`** — for each adjacent pair of windows, compute a combined novelty (0.5 × normalized energy L2 + 0.5 × chroma cosine distance). Boundaries are placed where novelty exceeds `mean + 1σ`. Each between-boundary run is then chunked greedily into blocks of {4, 2, 1} windows = {64, 32, 16} beats. Aggregates loudness/centroid/chroma per block. Emits `Section[]`.
-2. **`clusterSections(drafts)`** — first-fit greedy clustering. Walk sections in order; each one either joins an existing cluster whose representative is within `CLUSTER_THRESHOLD = 0.4` (combined energy L2 + chroma cosine) or seeds a new cluster. Cluster representatives update by running average. Returns `kind` per section.
+2. **`clusterSections(drafts)`** — first-fit greedy clustering. Walk sections in order; each one either joins an existing cluster whose representative is within `CLUSTER_THRESHOLD = 0.30` (combined energy L2 + chroma cosine) or seeds a new cluster. Cluster representatives update by running average. Returns `kind` per section.
 
 Tunables that change boundary granularity vs cluster granularity are independent: lowering the novelty threshold gives more (shorter) sections; lowering the cluster threshold gives more distinct kinds among the same set of sections.
+
+### Recompute paths (instant)
+
+`recomputeSectionsFromFramewise(framewise, bpm, gridOffsetSec)` derives a fresh `windowFeatures[]` + `sections[]` from the cached prefix sums. Synchronous; no worker. Called by:
+
+- **Editor save** (`applyEditorSave` in `main.ts`) — when bpm or gridOffsetSec changed.
+- **Beat-sync click** (`syncFromCurrentMoment`) — after the click sets `currentGridOffsetSec` to the click moment.
+
+Both feed into `commitAnalysisUpdate(next, gridOffsetSec)`, the single landing point that:
+- replaces in-memory `songAnalysis`
+- recomputes `currentForwardSpeed`, `songMaxLoudness`
+- calls `recolorStraightsFromAnalysis()` (per-straight tunnel edge color from new `Section.kind`)
+- calls `waveform.setSongStructure()` (early-outs if inputs match cached state)
+
+### Sidecar files (`src/audio-analysis/sidecar.ts`)
+
+Built-in tracks at `public/music/foo.mp3` may ship a `public/music/foo.mp3.analysis.json` sidecar. When present, first-time visitors skip the ~15s worker pass — `loadAndAnalyzeSource` fires `fetchSidecarText` in parallel with the audio download + hash, then `parseSidecar` validates format version + audio hash before accepting. Successful sidecar loads also populate IDB so the second visit hits the cache directly.
+
+Generation: dev tab → "export analysis sidecar" button (`downloadSidecar` in sidecar.ts).
+
+### Storage layout (IndexedDB)
+
+Single DB `hellorun2`, version 2, three stores (all defined in `src/track-storage.ts`):
+
+- `track-meta`: lightweight per-track row info (hash, name, durationSec, bpm, addedAt)
+- `track-bytes`: raw mp3 ArrayBuffer for user uploads
+- `analysis-cache`: full `SongAnalysis` (incl. ~1MB framewise prefix-sum arrays) keyed by hash
+
+The split keeps the boot-time list query cheap. `cache.ts` imports `openDb` + `ANALYSIS_STORE` from `track-storage.ts` to share the DB. localStorage is no longer used for analysis; `clearAnalysisCache()` still sweeps any legacy `hr2-analysis-v*` entries as a one-time courtesy.
 
 ## Debug overlay (`src/debug-view.ts`)
 

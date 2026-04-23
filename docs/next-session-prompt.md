@@ -1,69 +1,90 @@
-# Next-session handoff prompt — section detection / wiring
+# Next session — gate setup per section
 
-Copy the block below into a fresh Claude Code session. It contains everything needed to pick up where the last session left off without re-deriving context.
+We're continuing **HelloRun 2**, a first-person rhythm runner for the Cerebral Valley "Built with Opus 4.7: Claude Code" hackathon. **Submission is Mon 2026-04-27 at 01:00 BST** (Sun 20:00 EDT). Today is 2026-04-24 morning when this resumes.
 
----
+**Read these first** (in order):
+1. `CLAUDE.md` — project overview + auto-mode working style
+2. `docs/architecture.md` — current code layout and audio pipeline (recently updated for framewise + IDB + sidecar)
+3. `docs/milestone-status.md` — what's done (most of M9) and what's open
+4. `docs/hellorun2-plan.md` §5 (sections drive density/palette/transitions) and §7 M9 lines
 
-We're continuing work on **HelloRun 2**, a first-person rhythm runner. Read `CLAUDE.md`, `docs/architecture.md` (especially the Audio pipeline + Section detection sections), and `docs/milestone-status.md` (especially the M9 "still pending" list) before touching anything.
+## Where we are
 
-## Where we left off
+M1–M8 done. M9 covers most of what was planned: rolling corridor, per-straight density (loudness → maxDifficulty), per-kind palette, game-over polish, music editor, beat sync, IDB persistence, framewise architecture. **What's not yet exploited is the richness of section data for varying gate setups.**
 
-**Section detection is built and producing reasonable output.** The full pipeline:
+Current section→gameplay wiring is one knob, applied uniformly:
 
-1. Worker emits `windowFeatures: WindowFeature[]` — one per 16-beat window — with `loudness` (Essentia Loudness), `centroid` (SpectralCentroidTime), and `chroma` (averaged 12-bin HPCP).
-2. `detectSections(windowFeatures, bpm)` in `src/audio-analysis/analyzer.ts` runs combined energy+chroma novelty (mean+1σ threshold for boundaries), greedy-chunks into 16/32/64-beat blocks, then `clusterSections()` does first-fit greedy clustering (`CLUSTER_THRESHOLD = 0.4`) to assign a `kind` per section.
-3. `SongAnalysis.sections[]` is the result; cached in localStorage by SHA-256 of the audio bytes.
-4. The waveform overlay (top of screen) paints each section in a color picked by its `kind` from a heatmap gradient (blue→green→red), with phrase-grid lines solid white at section starts and dotted otherwise.
+```ts
+// src/main.ts appendSection — only one section field reaches gameplay:
+const audioSec = audioSectionForPathS(section.pathStart);
+const openSlots = generateChart(GATE_COUNT, {
+  rand: chartRand,
+  prevEndSlot: prevEndSlot ?? undefined,
+  maxDifficulty: maxDifficultyForSection(audioSec),  // ← from avgLoudness only
+});
+```
 
-**Dev-song result**: 20 sections coalesced into 2 kinds (loud-mix vs quiet-breakdown). Dance track structure reads correctly.
+`GATE_COUNT` is constant per straight: with `BEATS_PER_STRAIGHT=7`, `FIRST_GATE_BEAT=2`, `BEATS_PER_GATE=4` → `floor((7-2)/4)+1 = 2` gates. `BEATS_PER_GATE` is a global constant. Phrase vocabulary in `chart.ts` is uniform (19 hand-curated phrases, picked by max-difficulty filter only). `section.avgCentroid` and `section.avgChroma` are unused for gameplay.
 
-**`run npm run dev` then visit `?dev` (or just dev-server)**, click the top-right hamburger → dev tab for "clear track analysis", Space pauses, B toggles markers, M is the top-down debug.
+## What "gate setup per section" means
 
-## What we're doing this session
+Plan §5 says sections should drive "denser phrases during high-energy sections" and similar. The current implementation is the minimum viable version. There's a lot of latent expressiveness in `Section` we haven't tapped:
 
-The analysis side is in good shape. **Now wire it to gameplay** — this is the M9 work that the analysis was blocking. Two threads, in this order:
+- **Density (gates per straight)**: vary `BEATS_PER_GATE` per section. Loud chorus → gate every 2 beats (4 gates per straight). Quiet breakdown → gate every 8 beats (1 gate, basically a long no-decision passage).
+- **Phrase vocabulary biasing**: the existing `PHRASES[]` array has difficulty 1–4. We currently filter by max-difficulty. Could also bias by:
+  - Section centroid (high centroid = bright mix → bouncier slot patterns?)
+  - Section chroma (chord stability → rhythmic patterns vs jumpy patterns?)
+  - Position within section (start = ease in, middle = peak, end = wind down)
+- **Section-boundary cues**: at the moment palette changes are the only acknowledgment. Could:
+  - Force a "transition phrase" on the first straight of a new kind (smooth lead-in)
+  - Add a "rest beat" between sections (skip first gate on new section)
+  - Spawn a marker/cue gate at the boundary
+- **Section length awareness**: 16/32/64-beat sections each fit 2/4/8 corridor straights. Current code processes each straight independently. Could plan a coherent gate arc across the section's straights instead.
 
-### 1. Section-driven chart density (smaller, do first)
+## What's already in place that you can use
 
-In `src/main.ts` `appendSection()` — when a corridor straight is appended at a given pathS:
-- Compute the audio time the straight represents: `audioTime = pathS / currentForwardSpeed` (or use songAnalysis to find the right window).
-- Look up which audio section covers that time.
-- Map `section.avgLoudness` (relative to song max) to `maxDifficulty` in 1..4.
-- Pass to `generateChart(GATE_COUNT, { rand: chartRand, prevEndSlot, maxDifficulty })`.
+- `audioSectionForPathS(pathS): AudioSection | null` in `main.ts` — maps a corridor pathS to the audio Section covering that moment
+- `Section { kind, avgLoudness, avgCentroid, avgChroma, beatLength, startBeat, startSec, windowCount }`
+- `songMaxLoudness` cached in `main.ts` — denominator for normalized comparisons
+- `SECTION_EDGE_PALETTE` already cycles by kind
+- `commitAnalysisUpdate(next, gridOffsetSec)` — single landing point for state changes; if you re-derive sections you can route through this
 
-Result: quiet sections produce easy phrases (recovery / mid-mid-mid stuff), loud sections unlock the hard phrases (jumps, alternations). This is plan §5's "denser phrases during high-energy sections."
+The chart generator (`src/chart.ts`) is small and easy to extend:
+- `generateChart(gateCount, { maxDifficulty, prevEndSlot, rand })` — current API
+- `PHRASES[]` constant lists 19 phrases with `{slots, difficulty}`
+- Add new options without breaking existing calls
 
-Watch out for the case where `songAnalysis` is null (loading or analysis failed) — fall back to default `maxDifficulty = 4` (current behavior).
+## Open design questions (decide early)
 
-### 2. Palette shifts on section kind changes (bigger)
+1. **Density: variable or fixed?** Variable density means `GATE_COUNT` is no longer a constant. The corridor straight length stays uniform (geometric simplicity), but gates land at variable beats. Code touch: `appendSection` derives `gateCount` per-straight; `createGates(openSlots)` already takes a runtime slot array. Plan §2 "gates never at turns" still holds.
+2. **Per-section feel coherence vs per-straight independence**: a section spans 1/2/4 windows = 2/4/8 corridor straights. Should the chart be planned for the whole section at once, or each straight still independently with section-level filters? Independent is simpler; whole-section planning enables phrase arcs (intro / build / peak / cool).
+3. **Centroid mapping**: high centroid = bright/treble = bouncy patterns? Or = busy = denser? Pick a hypothesis and ship; iterate by feel. The dev song's two kinds happen to differ in centroid significantly (kind 0: ~140-1000Hz, kind 1: ~1700-4400Hz) so the contrast will be obvious.
+4. **Section boundary handling**: insert any gameplay marker (rest beat, transition phrase) or just let palette change do the talking?
+5. **Difficulty curve over the song**: should the chart get progressively harder regardless of section, or strictly mirror loudness? "Always more challenging by minute 3" is a runner convention. "Easy outro" is too. Decide.
 
-Plan §5: every section-kind transition shifts the corridor's edge color. Closed-barrier red is fixed (don't change it).
+## What to test with
 
-Steps:
-- Define a small palette of N edge-color hues.
-- Track the current kind that the camera is "in" — derived from `pathS / currentForwardSpeed` → audio time → which `section` covers it → `section.kind`.
-- When the kind changes, update the tunnel's `LineMaterial.color` (and any markers' edge colors that should follow). Possibly with a smooth interpolation over a beat or two.
-- The cube fill color (`COLOR_FACE`) probably stays the same — only edges shift, per plan §5: "Faces stay neutral dark across shifts."
+- **Dev song**: 7-min track, 2 kinds (loud-mix vs quiet-breakdown), kind-1 transitions at 128s and 200s. Good for feel-testing density/palette contrast.
+- **Drop a different track**: any pop/EDM with verse/chorus/bridge structure. Should produce 4–5 kinds at the current `CLUSTER_THRESHOLD = 0.30`.
+- **`tools/analysis-check.mjs`** — prints per-window features + per-section features. Use after tweaking section detection or section-driven gameplay to see what numerical inputs are reaching the gate generator.
+- **`tools/collision-check.mjs`** — seeded chart with `?seed=1`. If you change `generateChart` API, may need updates to keep the assertion meaningful.
 
-The hard part is figuring out where to keep the per-straight materials and how to update them. Currently each straight is built once via `createTunnel()` which returns its own `LineMaterial`. Updating the color on existing materials should work — the LineMaterial reference is stored in `edgeMaterials[]` per-straight. We need to know which straight belongs to which kind (a function of pathS → kind via audio sections).
+## Workflow rules (carried over from prior sessions)
 
-A reasonable first cut: when `appendSection()` builds a new straight, look up the kind for its pathS range and set the straight's edge material color from the palette before adding to scene. No interpolation; sections > 16 beats so the color holds for ≥8s at 120 BPM.
+- **Auto mode active**: execute, don't plan. Surface only true branch points.
+- **No `git commit`** unless Carlos explicitly says so. Never push.
+- **No mp3 commits** ever (gitignore is authoritative; never `git add -f` audio).
+- **Tracks not songs** in user-facing copy and new identifiers.
+- **Release pointer lock before any UI overlay appears** (already wired for existing transitions; remember when adding new ones).
+- **Feel-spec discipline**: every tunable lives in `src/constants.ts`. New per-section gameplay knobs go there too.
+- Kill stale dev servers with `npx kill-port 5173 5174 5175` (Vite leaves zombies on sibling ports).
 
-## Open questions worth deciding early
+## Suggested approach for the session
 
-- **Should `detectSections` also emit a `musicalSections[]` that coalesces consecutive same-kind sections?** User asked about this last session; we deferred. Useful if you want "one entry per chord-stable section" rather than the chunked 16/32/64 view. Not needed for density wiring; might be needed for palette shifts (so the color holds across multi-block same-kind runs without "shifting" at intra-section block boundaries).
-- **CLUSTER_THRESHOLD tuning**: 0.4 is conservative. Dev-song gets 2 kinds. For more typical pop/EDM (verse/pre/chorus/bridge), 0.25–0.30 likely produces 4–5 kinds — a more interesting palette story. Might be worth lowering before wiring palette so we get more visible variety.
-- **What palette to use for kinds?** Heatmap blue→red is fine for the analysis viz but might be wrong for in-game. Plan aesthetic is Tron-Recognizer (cyan + red). A constrained palette in the cyan/violet/orange/cyan range would feel more on-brand than a full rainbow.
+1. Start the dev server, drop a track with clear verse/chorus structure, take note of how the existing density variation feels.
+2. Pick one or two of the design choices above, propose to Carlos, build the smallest viable version.
+3. Tune by feel, not by spec. The whole §5 chart-generation work is a feel-spec exercise.
+4. If a tunable should live in `constants.ts`, put it there from the start.
+5. Don't over-engineer the section→gate pipeline. There's only ~2 days to submission and what's there already works — incremental wins compound.
 
-## Useful tools to validate as you go
-
-- `node tools/analysis-check.mjs` — prints window features + sections + kind distribution. Use after tweaking `CLUSTER_THRESHOLD` or boundary threshold to see how it changes the segmentation.
-- The waveform overlay itself is the live visual — color changes per-kind are visible there even before you wire palette to the corridor.
-- `node tools/collision-check.mjs` — make sure density wiring doesn't break the seeded collision test (it uses `?seed=1` and assumes a chart with a lethal gate; if quiet-section maxDifficulty=1 produces all-mid charts the test will skip with "no non-mid gates").
-
-## Workflow notes
-
-- Don't commit unless I ask (standing rule).
-- Auto mode active — keep it that way. Execute, don't plan.
-- If you start a dev server, kill it with `npx kill-port 5173 5174 5175` — Vite leaves zombies on sibling ports if you only kill 5173.
-- **Audio caching is on** — first analysis takes ~15s, subsequent reloads ~200ms. If you change `detectSections` or `clusterSections` logic, bump `CACHE_VERSION` in `src/audio-analysis/cache.ts` from 1 → 2 OR press Tab → "clear track analysis" before reloading.
+After this, what's left for M10 polish: bloom on edges, beat pulse, end-of-song screen, corridor pruning. Visual polish is intentionally deferred until gameplay is locked.

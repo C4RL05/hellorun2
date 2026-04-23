@@ -104,13 +104,28 @@ Plan: sections drive difficulty, beats drive gate placement, section boundaries 
 - ✅ **Rolling corridor generation**: `src/corridor.ts` exports `Section` (straight or turn) and `samplePath(sections, s)`; `main.ts` maintains a growing `sections[]` with `ensureSectionsAhead(pathS)` appending straight→turn→straight→turn on demand. Turn direction alternates right/left so the corridor zig-zags. Chart generator is streamed per-corridor-straight via `generateChart(GATE_COUNT, { prevEndSlot })`, preserving corner continuity.
 - ✅ **Section data ready** (M8): `analysis.sections[]` provides the per-block `kind`, `avgLoudness`, `avgCentroid`, `avgChroma`. Everything needed to drive density and palette is now exposed.
 
-**Done (this session)**:
-- ✅ **Section→chart density**: `appendSection` looks up the audio section covering each corridor straight via `audioSectionForPathS(pathStart)` and maps `section.avgLoudness / songMaxLoudness` to `maxDifficulty` quartiles (1–4). Falls back to `maxDifficulty=4` when `songAnalysis` is null (boot before analysis lands; analysis failed).
-- ✅ **Palette shifts on `kind` changes**: `SECTION_EDGE_PALETTE` (cyan/pink/amber/teal/violet) in `constants.ts`; each straight's tunnel `LineMaterial.color` is set from `palette[section.kind % palette.length]` at build time. Barrier edge color (`COLOR_BARRIER_EDGE`) untouched. `recolorStraightsFromAnalysis()` runs when analysis lands so the boot-built straights pick up the right color.
-- ✅ **CLUSTER_THRESHOLD lowered to 0.30** (CACHE_VERSION bumped 1→2). Dev song still resolves to 2 kinds — its breakdown vs main-mix gap is too clean to split further; typical pop/EDM should now surface 4–5.
+**Done**:
+- ✅ **Section→chart density**: `appendSection` looks up the audio section covering each corridor straight and maps `section.avgLoudness / songMaxLoudness` to `maxDifficulty` quartiles (1–4). Quiet → easy phrases; loud → hard.
+- ✅ **Palette shifts on `kind`**: `SECTION_EDGE_PALETTE` in `constants.ts`; per-straight tunnel edge color from `palette[section.kind % len]`. Barrier red untouched. `recolorStraightsFromAnalysis()` propagates new colors to existing built straights when analysis updates.
+- ✅ **CLUSTER_THRESHOLD lowered to 0.30** (CACHE_VERSION bumps as needed). Dev song still resolves to 2 kinds — too internally similar — typical pop/EDM should surface 4–5.
+- ✅ **Game-over rewind + vinyl audio** (`docs/game-over-rewind-and-vinyl-audio.md`). Backward path drift + Steven's-law audio playbackRate ramp.
+- ✅ **RMB-on-death = continue from previous turn** (`continueFromPreviousTurn` → `seekToSongTime`).
+- ✅ **Waveform LMB seek snaps to nearest preceding turn** so player gets the corner as a lead-in, not gates immediately.
+- ✅ **Pointer lock auto-acquire on transitions INTO active play** (start, respawn, seek); auto-release on transitions OUT (collision, pause, quit, song end).
+- ✅ **User menu** (top-right hamburger) with Settings / Music / Dev tabs. Drop-zone moved into Music tab.
+- ✅ **Track list with status lifecycle** (`loading → analyzing → ready / failed`); progress label per row; × to delete user tracks.
+- ✅ **IndexedDB persistence**: track-meta + track-bytes for user uploads; analysis-cache for `SongAnalysis` (incl. ~1MB framewise per song). Supports 20+ cached songs without quota concerns.
+- ✅ **Music editor modal** (`src/track-editor.ts`): waveform with wheel zoom, RMB-drag pan, LMB click-to-preview + LMB-drag-to-shift-grid; numeric BPM; phrase-grid lines.
+- ✅ **Beat-sync click** (LMB during play): the moment becomes beat 1; corridor rebuilds from pathS=0 with new gridOffset; white flash bridges the cut; sections recompute instantly via framewise prefix sums.
+- ✅ **Framewise prefix-sum architecture** (`src/audio-analysis/framewise.ts`): per-frame Essentia work runs ONCE per song into cumulative arrays; recompute paths (editor save, sync, future per-section gameplay tweaks) re-aggregate in O(1) per window.
+- ✅ **Sidecar files** (`src/audio-analysis/sidecar.ts`): `<track>.mp3.analysis.json` next to the mp3 lets first-time visitors skip the 15s analysis. Format-versioned + audio-hash-validated. Dev tab has an "export analysis sidecar" button.
 
-**Deferred (still optional)**:
-- ❌ `detectSections` could emit a `musicalSections[]` that coalesces consecutive same-kind sections. Not needed: callers key on `kind`, so contiguous same-kind sections naturally produce no palette shift / density step. Worth revisiting only if a future feature needs "one entry per chord-stable region."
+**Deferred (optional)**:
+- ❌ `musicalSections[]` coalescing consecutive same-kind sections. Not needed: callers key on `Section.kind`, so contiguous same-kind sections naturally produce no palette shift.
+- ❌ Drop `windowFeatures` / `windowDurationSec` from `SongAnalysis` (derivable from framewise + bpm + gridOffsetSec). Cleaner type, but invasive.
+- ❌ Confidence threshold UX ("analysis uncertain — sync may feel off") when multifeature confidence < 2.5.
+
+**Open for next session — gate setup per section**: the only section→gameplay knob currently wired is the `maxDifficulty` quartile from loudness. Density (gates per straight) is fixed at `BEATS_PER_GATE = 4`. Phrase vocabulary biasing per section kind isn't exploited. See `docs/next-session-prompt.md`.
 
 ## ⏳ M10 — Polish (not started)
 

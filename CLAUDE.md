@@ -12,7 +12,7 @@ Working through plan §7's 10-milestone sequence. See [`docs/milestone-status.md
 
 - **Milestones 1–7 complete**: cube-tunnel whitebox, forward motion, player input, gates + collision, 90° turn + second straight, audio-clock-driven pathS, procedural chart generation.
 - **Milestone 8 essentially done**: Essentia.js worker; BPM + grid-offset detection (with onset-bounded back-extrapolation); BPM-driven forward speed; drag-drop BYOM; per-16-beat window features (loudness/centroid/HPCP chroma); section detection (combined energy+chroma novelty → 16/32/64-beat blocks → first-fit clustering into "kinds"); persistent localStorage analysis cache.
-- **Milestone 9 essentially done**: rolling corridor generation (section list, `ensureSectionsAhead`, alternating turns, streamed per-section charts with corner continuity); per-straight density driven by audio-section avgLoudness (quiet→easy, loud→hard); per-straight tunnel edge color from `SECTION_EDGE_PALETTE` indexed by `Section.kind`; retroactive recolor when analysis lands so boot-time straights catch up.
+- **Milestone 9 essentially done**: rolling corridor + per-straight density + per-kind palette; game-over rewind+vinyl; RMB-on-death continue; waveform seek snaps to preceding turn; pointer-lock auto-acquire/release on play transitions; user-menu modal with music tab + track list + status lifecycle + IDB persistence + music editor modal (BPM/grid drag + zoom/pan); LMB beat-sync; framewise prefix-sum architecture so editor-save and sync recomputes are sub-ms; sidecar JSON files for shipping precomputed analyses.
 - **Milestone 10 not started**.
 
 Note on terminology: a "section" in this codebase has two unrelated meanings.
