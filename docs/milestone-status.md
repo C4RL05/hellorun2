@@ -85,7 +85,7 @@ Plan: BPM + beat grid + section detection. Drop-in audio files.
 - ✅ **BPM → FORWARD_SPEED wiring**: `currentForwardSpeed = forwardSpeedForBpm(bpm)` after analysis. `__getGateTimesMs()` reads live speed.
 - ✅ **Per-16-beat window features**: `WindowFeature` per 16-beat slice — `loudness` (Essentia Loudness), `centroid` (SpectralCentroidTime), `chroma` (averaged 12-bin HPCP via Windowing → Spectrum → SpectralPeaks → HPCP). 22 windows on a 7-min track at 120 BPM.
 - ✅ **Section detection**: `detectSections(windowFeatures, bpm)` — combined energy+chroma novelty, mean+1σ threshold for boundaries, greedy chunking into runs of {1, 2, 4} windows (= 16/32/64 beats). Then `clusterSections()` first-fit greedy clustering on normalized features (loudness L2 + chroma cosine, threshold 0.4) assigns a `kind` per section. All same-kind sections render in the same waveform color.
-- ✅ **Persistent analysis cache**: `src/audio-analysis/cache.ts` — localStorage keyed by SHA-256 of audio bytes. Skip the worker when re-loading a known song. Versioned key (`hr2-analysis-v1:`) for schema-bump invalidation. "Clear track analysis" button in the dev menu sweeps all versions.
+- ✅ **Persistent analysis cache**: `src/audio-analysis/cache.ts` — localStorage keyed by SHA-256 of audio bytes. Skip the worker when re-loading a known song. Versioned key (`hr2-analysis-v1:`) for schema-bump invalidation. "Clear track analysis" button (user menu → dev tab) sweeps all versions.
 
 **Deferred**:
 - ❌ **Confidence threshold UX**: warn the player when multifeature confidence < 2.5 ("analysis uncertain — sync may feel off"). Today the low-confidence case falls through silently.

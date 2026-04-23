@@ -43,6 +43,18 @@ export function setCachedAnalysis(hash: string, analysis: SongAnalysis): void {
   }
 }
 
+// Removes the cached analysis for one specific track (current
+// CACHE_VERSION only — orphaned entries from older versions are reaped
+// by clearAnalysisCache). Used when the user deletes a track from the
+// music tab so the localStorage entry doesn't linger forever.
+export function removeAnalysisFromCache(hash: string): void {
+  try {
+    localStorage.removeItem(CACHE_PREFIX + hash);
+  } catch (err) {
+    console.warn("analysis cache delete failed:", err);
+  }
+}
+
 // Removes every cached analysis (current and prior CACHE_VERSIONs).
 // Returns the count of removed entries.
 export function clearAnalysisCache(): number {

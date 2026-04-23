@@ -26,7 +26,7 @@ A `dev-song.mp3` placed in `public/` (gitignored) auto-loads on boot for develop
 | Click waveform | Seek to that point (snaps to nearest preceding turn) |
 | Esc | Quit to title |
 
-Dev-mode keys (always on in `npm run dev`, opt-in via `?dev` in production builds): Space (pause), B (musical-structure markers), M (top-down debug), I (invincibility), Tab (dev menu).
+Dev-mode keys (always on in `npm run dev`, opt-in via `?dev` in production builds): Space (pause), B (musical-structure markers), M (top-down debug), I (invincibility). Dev-only actions (e.g., clear track analysis cache) live under the hamburger menu's "dev" tab.
 
 ## How it works
 

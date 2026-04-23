@@ -225,9 +225,8 @@ Click-to-seek is enabled when the host passes `onSeek` to the constructor; the c
 | B | Toggle markers (beat/bar/phrase/period squares) |
 | M | Toggle debug overlay (top-down) — gated inside `DebugView` via its `enabled` option |
 | I | Toggle invincibility (skip collision checks) |
-| Tab | Toggle dev menu modal (`#dev-menu` overlay) |
 
-The dev menu modal hosts buttons for runtime ops; current entry is "clear track analysis" which calls `clearAnalysisCache()`.
+Dev-only runtime actions (currently "clear track analysis" → `clearAnalysisCache()`) live in the user menu's `dev` tab — any element carrying `data-dev-only` is pruned from the DOM when `devMode` is false. The previous Tab-toggled `#dev-menu` modal has been removed.
 
 ## Collision (`src/collision.ts`)
 

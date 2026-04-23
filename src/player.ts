@@ -53,6 +53,16 @@ export class PlayerController {
     if (!this.pointerLocked) this.canvas.requestPointerLock();
   }
 
+  // Release mouse capture so the cursor is freed for UI interaction
+  // (menu, waveform click, hamburger). Call this on every transition
+  // OUT of active gameplay (collision, pause, quit-to-title, song end)
+  // BEFORE any UI overlay is shown — otherwise the cursor materializes
+  // unpredictably when the lock breaks on its own (e.g. via Esc), which
+  // can land it on an unintended target.
+  releasePointerLock(): void {
+    if (this.pointerLocked) document.exitPointerLock();
+  }
+
   // Returns the world-space Y for this frame.
   update(dt: number): number {
     const axis = (this.holdingUp ? 1 : 0) + (this.holdingDown ? -1 : 0);

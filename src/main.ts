@@ -55,8 +55,15 @@ import {
   clearAnalysisCache,
   getCachedAnalysis,
   hashArrayBuffer,
+  removeAnalysisFromCache,
   setCachedAnalysis,
 } from "./audio-analysis/cache";
+import {
+  deleteTrack as deleteStoredTrack,
+  getTrackBytes,
+  listTrackMeta,
+  putTrack as putStoredTrack,
+} from "./track-storage";
 import { generateChart, mulberry32 } from "./chart";
 import { PlayerController } from "./player";
 import { createGates } from "./scene/gates";
@@ -467,6 +474,159 @@ const titleSubtitle = titleOverlay?.querySelector(".subtitle") as
 // file during a prior analysis correctly supersedes it.
 let analysisGen = 0;
 
+// Track library shown in the music tab. In-memory only — survives across
+// menu open/close but not page reload (the underlying AudioBuffer / file
+// blob isn't kept past the active track, so re-loading a past entry
+// would need the user to drop it again). Each successful analysis
+// upserts an entry by hash so re-loading the same file just bumps it
+// active rather than duplicating.
+//
+// `origin` distinguishes built-in tracks (shipped with the game, can't
+// be deleted) from user-uploaded ones (delete button rendered, removable
+// from the list).
+type TrackOrigin = "builtin" | "user";
+// Lifecycle of a row in the music tab. `loading` and `analyzing` are
+// the in-flight states (not playable, but × can cancel/remove them);
+// `ready` is the only clickable-to-play state; `failed` shows the error
+// and is removable. bpm/durationSec are populated only at `ready`;
+// progressLabel feeds the row's right-hand text during in-flight
+// states; errorMsg replaces it on failure.
+type TrackStatus = "loading" | "analyzing" | "ready" | "failed";
+interface Track {
+  readonly hash: string;
+  readonly name: string;
+  readonly origin: TrackOrigin;
+  readonly status: TrackStatus;
+  readonly bpm?: number;
+  readonly durationSec?: number;
+  readonly progressLabel?: string;
+  readonly errorMsg?: string;
+}
+const tracks: Track[] = [];
+let activeTrackHash: string | null = null;
+
+function upsertTrack(track: Track): void {
+  const existing = tracks.findIndex((t) => t.hash === track.hash);
+  if (existing >= 0) tracks[existing] = track;
+  else tracks.push(track);
+  // Only ready tracks can become active — the loading/analyzing rows
+  // have no playable BPM yet, and we don't want them stealing the
+  // active highlight from the previously-playable track.
+  if (track.status === "ready") activeTrackHash = track.hash;
+  renderTrackList();
+}
+
+// Patch helper for the in-flight states. No-op if the row was deleted
+// while the analyzer worker was still running — the trackExists check
+// at completion sites will also catch this, but updateTrack defends
+// against intermediate progress callbacks too.
+function updateTrack(hash: string, patch: Partial<Track>): void {
+  const idx = tracks.findIndex((t) => t.hash === hash);
+  if (idx < 0) return;
+  tracks[idx] = { ...tracks[idx], ...patch };
+  renderTrackList();
+}
+
+function trackExists(hash: string): boolean {
+  return tracks.some((t) => t.hash === hash);
+}
+
+function removeUserTrack(hash: string): void {
+  const idx = tracks.findIndex((t) => t.hash === hash);
+  if (idx < 0) return;
+  // Guard against removing built-ins via a stale data-hash on a stray
+  // delete button. Render output already omits the button for built-ins,
+  // but be defensive.
+  if (tracks[idx].origin !== "user") return;
+  tracks.splice(idx, 1);
+  // Clearing activeTrackHash if we removed the active row drops the
+  // highlight; audio keeps playing on the existing source. The user
+  // explicitly chose delete so we don't preempt and stop playback.
+  if (activeTrackHash === hash) activeTrackHash = null;
+  renderTrackList();
+  // Evict the persistent bytes (IndexedDB) and the analysis cache
+  // (localStorage) so a deleted track is fully forgotten — re-uploading
+  // the same file later will go through fresh analysis. Both are
+  // fire-and-forget; the user-visible list update already happened.
+  void deleteStoredTrack(hash).catch((err) =>
+    console.warn("track delete failed:", err),
+  );
+  removeAnalysisFromCache(hash);
+}
+
+function renderTrackList(): void {
+  const list = document.getElementById("track-list");
+  if (!list) return;
+  if (tracks.length === 0) {
+    list.innerHTML = '<li class="track-empty">no tracks loaded yet</li>';
+    return;
+  }
+  // Built-ins first, then user tracks in append/restore order. Without
+  // this the order flips depending on whether IDB restore finishes
+  // before or after the dev-song auto-load on boot. Stable sort
+  // (ES2019+) preserves user-track ordering.
+  const ordered = [...tracks].sort((a, b) =>
+    a.origin === b.origin ? 0 : a.origin === "builtin" ? -1 : 1,
+  );
+  // Build the rows manually so the active highlight + meta formatting
+  // stay tight; quantity is tiny so innerHTML rewriting is cheaper than
+  // a diff. Names are escaped to defuse user-supplied filenames that
+  // could contain HTML chars; hash is hex so safe to inline raw.
+  const rows = ordered.map((t) => {
+    const active = t.hash === activeTrackHash ? " active" : "";
+    const deleteBtn =
+      t.origin === "user"
+        ? `<button class="track-delete" type="button" data-hash="${t.hash}" aria-label="remove track">×</button>`
+        : "";
+    let meta: string;
+    if (t.status === "ready") {
+      const mins = Math.floor((t.durationSec ?? 0) / 60);
+      const secs = Math.floor((t.durationSec ?? 0) % 60)
+        .toString()
+        .padStart(2, "0");
+      meta = `${(t.bpm ?? 0).toFixed(0)} bpm · ${mins}:${secs}`;
+    } else if (t.status === "failed") {
+      meta = `failed — ${escapeHtml(t.errorMsg ?? "unknown error")}`;
+    } else {
+      // loading / analyzing
+      meta = escapeHtml(t.progressLabel ?? t.status);
+    }
+    return (
+      `<li class="track-item ${t.status}${active}" data-hash="${t.hash}">` +
+      `<span class="track-name">${escapeHtml(t.name)}</span>` +
+      `<span class="track-meta">${meta}</span>` +
+      deleteBtn +
+      `</li>`
+    );
+  });
+  list.innerHTML = rows.join("");
+}
+
+// Delegated click handler — re-rendering the list throws away per-row
+// listeners, so we attach once on the parent and read the row's hash
+// from the data attribute. Two interactions: clicking the × button
+// removes a user track; clicking anywhere else on a row plays it.
+document.getElementById("track-list")?.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+  if (target.classList.contains("track-delete")) {
+    const hash = target.dataset.hash;
+    if (hash) removeUserTrack(hash);
+    return;
+  }
+  const row = target.closest(".track-item") as HTMLElement | null;
+  const hash = row?.dataset.hash;
+  if (hash) void playTrack(hash);
+});
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // Maps analyzer-worker stage names (technical) to subtitle labels (friendly).
 // Stages that go unmapped fall through to the raw worker name.
 const STAGE_LABELS: Record<string, string> = {
@@ -478,37 +638,77 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 async function loadAndAnalyzeSource(
-  source: File | string,
+  source: File | ArrayBuffer | string,
   label: string,
+  origin: TrackOrigin = "user",
 ): Promise<void> {
+  // gen tracks "is this the latest call to loadAndAnalyzeSource?" If a
+  // newer call has bumped analysisGen, this one's row + persistence
+  // still proceed (per-track ops), but we skip overwriting the global
+  // state (audioBuffer / waveform / currentForwardSpeed / etc) at the
+  // end. Subtitle/progress writes are also gen-checked so the title
+  // line reflects the latest load only.
   const gen = ++analysisGen;
   if (!audioCtx) audioCtx = new AudioContext();
+  const isLatest = () => gen === analysisGen;
 
   const setSubtitle = (text: string) => {
-    if (gen === analysisGen && titleSubtitle) titleSubtitle.textContent = text;
+    if (isLatest() && titleSubtitle) titleSubtitle.textContent = text;
+  };
+
+  // Track-row updaters. `rowHash` is null until we've computed the hash
+  // (we need the bytes first). Until then there's no row to update;
+  // after, every state transition / progress tick goes through these.
+  let rowHash: string | null = null;
+  const setRowStatus = (status: TrackStatus, patch: Partial<Track> = {}) => {
+    if (rowHash) updateTrack(rowHash, { status, ...patch });
+  };
+  const setRowProgress = (progressLabel: string) => {
+    if (rowHash) updateTrack(rowHash, { progressLabel });
   };
 
   try {
     setSubtitle(`loading ${label}…`);
-    const arr =
-      source instanceof File
-        ? await source.arrayBuffer()
-        : await (await fetch(source)).arrayBuffer();
-    if (gen !== analysisGen) return;
+    let arr: ArrayBuffer;
+    if (source instanceof ArrayBuffer) {
+      arr = source;
+    } else if (source instanceof File) {
+      arr = await source.arrayBuffer();
+    } else {
+      arr = await (await fetch(source)).arrayBuffer();
+    }
 
     // Hash before decode — decodeAudioData detaches the ArrayBuffer in
     // Chromium, after which the bytes are unreadable.
     const hash = await hashArrayBuffer(arr);
-    if (gen !== analysisGen) return;
     const cached = getCachedAnalysis(hash);
 
-    // Tear down any prior audio source playing the old buffer, so the
-    // replacement isn't mixed with leftover audio.
-    stopAudio();
-    audioBuffer = await audioCtx.decodeAudioData(arr);
-    if (gen !== analysisGen) return;
-    waveform.setAudioBuffer(audioBuffer);
-    songAnalysis = null;
+    // Add the row to the music-tab list as soon as we have a hash, with
+    // status "loading". Subsequent stage transitions update it in
+    // place; the user sees their upload appear immediately and watches
+    // it progress instead of staring at a frozen list. If a row with
+    // this hash already exists (e.g., a previously-deleted-then-re-
+    // dropped track), upsert overwrites it — restarting the lifecycle.
+    rowHash = hash;
+    upsertTrack({
+      hash,
+      name: label,
+      origin,
+      status: "loading",
+      progressLabel: "loading",
+    });
+
+    // Clone the bytes for IndexedDB persistence before decode detaches
+    // them. Only user uploads are persisted (built-ins re-fetch from
+    // /public on each boot and don't need their bytes saved).
+    const bytesForStorage = origin === "user" ? arr.slice(0) : null;
+
+    // Decode + analyze run unconditionally (no gen-checks here) so the
+    // row can always reach a terminal state (ready or failed). The
+    // result lives in localAudioBuffer / result; we only assign to
+    // global audioBuffer if this load is still the latest at the end.
+    const localAudioBuffer = await audioCtx.decodeAudioData(arr);
+    setRowStatus("analyzing", { progressLabel: cached ? "cache" : "starting" });
 
     let result: SongAnalysis;
     if (cached) {
@@ -525,21 +725,66 @@ async function loadAndAnalyzeSource(
       const renderTick = () => {
         const elapsed = Math.round((performance.now() - analysisStart) / 1000);
         setSubtitle(`analyzing audio — ${stage} (${elapsed}s)`);
+        setRowProgress(`${stage} (${elapsed}s)`);
       };
       renderTick();
       const tickInterval = setInterval(renderTick, 250);
       try {
-        result = await analyzeAudio(audioBuffer, (p) => {
+        result = await analyzeAudio(localAudioBuffer, (p) => {
           stage = STAGE_LABELS[p.stage] ?? p.stage;
           renderTick();
         });
       } finally {
         clearInterval(tickInterval);
       }
-      if (gen !== analysisGen) return;
       setCachedAnalysis(hash, result);
     }
-    if (gen !== analysisGen) return;
+
+    // If the user × the row mid-analysis, bail without further mutation
+    // (no upsert-to-ready, no IDB persist, no global writes). The
+    // worker's result is silently discarded.
+    if (!trackExists(hash)) return;
+
+    upsertTrack({
+      hash,
+      name: label,
+      origin,
+      status: "ready",
+      bpm: result.bpm,
+      durationSec: localAudioBuffer.duration,
+    });
+    if (bytesForStorage) {
+      // Fire-and-forget — persistence failures (quota / private mode)
+      // shouldn't block the in-memory load that already succeeded.
+      void putStoredTrack(
+        {
+          hash,
+          name: label,
+          durationSec: localAudioBuffer.duration,
+          bpm: result.bpm,
+          addedAt: Date.now(),
+        },
+        bytesForStorage,
+      ).catch((err) => console.warn("track persist failed:", err));
+    }
+    console.log(
+      `analyzed ${label}: bpm=${result.bpm.toFixed(2)}, ` +
+        `gridOffsetSec=${result.gridOffsetSec.toFixed(3)}, ` +
+        `confidence=${result.confidence.toFixed(2)}, ` +
+        `beats=${result.beats.length}`,
+    );
+
+    // Global state — only the latest load wins. A stale load completing
+    // here just leaves its row "ready" (clickable to play later) and
+    // doesn't disturb the active track.
+    if (!isLatest()) return;
+
+    // Stop the previously-playing source now that we're committing to
+    // the new buffer. Stopping earlier (at decode time) would create an
+    // awkward silent gap during the 15s analysis.
+    stopAudio();
+    audioBuffer = localAudioBuffer;
+    waveform.setAudioBuffer(localAudioBuffer);
     songAnalysis = result;
     currentGridOffsetSec = result.gridOffsetSec;
     currentForwardSpeed = forwardSpeedForBpm(result.bpm);
@@ -549,19 +794,15 @@ async function loadAndAnalyzeSource(
     );
     recolorStraightsFromAnalysis();
     waveform.setSongStructure(result.bpm, result.gridOffsetSec, result.sections);
-    console.log(
-      `analyzed ${label}: bpm=${result.bpm.toFixed(2)}, ` +
-        `forwardSpeed=${currentForwardSpeed.toFixed(2)} u/s, ` +
-        `gridOffsetSec=${result.gridOffsetSec.toFixed(3)}, ` +
-        `confidence=${result.confidence.toFixed(2)}, ` +
-        `beats=${result.beats.length}`,
-    );
     setSubtitle("click to start");
   } catch (err) {
-    if (gen !== analysisGen) return;
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`failed to load ${label}:`, err);
-    setSubtitle(`failed — drop an mp3 to try again (${msg})`);
+    setSubtitle(`failed — open menu → music to load (${msg})`);
+    // If the row was already created (hash computed before the throw),
+    // mark it failed so the user can see what happened and × it. If we
+    // failed before the hash (e.g., file read error), there's no row.
+    setRowStatus("failed", { errorMsg: msg });
   }
 }
 
@@ -575,6 +816,9 @@ function startAudio(): void {
   audioSource.connect(audioCtx.destination);
   audioSource.onended = () => {
     running = false;
+    // Free the cursor at song end so the user can pick another track
+    // / open the menu without first having to break pointer lock.
+    player.releasePointerLock();
   };
   audioStartTime = audioCtx.currentTime;
   audioSource.start();
@@ -621,6 +865,11 @@ function startGame(): void {
   startAudio();
   running = true;
   titleOverlay?.classList.add("hidden");
+  // Acquire pointer lock as part of the same gesture that started the
+  // game — saves the user a second click to get mouse-look. Browsers
+  // require pointer lock to be requested inside a user activation, and
+  // startGame is only called from click handlers, so this is safe.
+  player.requestPointerLockIfNeeded();
 }
 
 // Spacebar toggle. Pause stops the current AudioBufferSourceNode (it's
@@ -641,6 +890,7 @@ function togglePause(): void {
       audioSource.connect(audioCtx.destination);
       audioSource.onended = () => {
         running = false;
+        player.releasePointerLock();
       };
       audioStartTime = audioCtx.currentTime - pauseOffsetSec;
       audioSource.start(0, pauseOffsetSec);
@@ -653,6 +903,8 @@ function togglePause(): void {
     }
     stopAudio();
     paused = true;
+    // Free the cursor while paused so menu / waveform are reachable.
+    player.releasePointerLock();
   }
 }
 
@@ -660,23 +912,51 @@ titleOverlay?.addEventListener("click", () => {
   if (audioBuffer) startGame();
 });
 
-// Dev menu (Tab toggle, dev-mode-only). Placeholder action for now —
-// later this'll host runtime tunables (cluster threshold, marker sizes,
-// section probes, etc).
-const devMenu = document.getElementById("dev-menu");
-function toggleDevMenu(): void {
-  devMenu?.classList.toggle("hidden");
-}
-// Backdrop click closes the menu. The full-viewport #dev-menu wraps a
-// centered .dev-modal child; e.target === devMenu means the click landed
-// on the dimmed backdrop (clicks inside the modal bubble up with target
-// set to a child element).
-devMenu?.addEventListener("click", (e) => {
-  if (e.target === devMenu) toggleDevMenu();
-});
 document.getElementById("dev-clear-cache")?.addEventListener("click", () => {
   const removed = clearAnalysisCache();
   console.log(`cleared ${removed} cached analysis entr${removed === 1 ? "y" : "ies"}`);
+});
+
+// User menu (top-right hamburger). Always available; the `dev` tab and
+// any element marked `data-dev-only` are pruned in production builds.
+// Tab buttons carry data-tab matching their pane's data-pane.
+const menuButton = document.getElementById("menu-button");
+const userMenu = document.getElementById("menu");
+if (!devMode) {
+  userMenu
+    ?.querySelectorAll<HTMLElement>("[data-dev-only]")
+    .forEach((el) => el.remove());
+}
+function toggleUserMenu(): void {
+  userMenu?.classList.toggle("hidden");
+}
+function userMenuOpen(): boolean {
+  return userMenu !== null && !userMenu.classList.contains("hidden");
+}
+menuButton?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleUserMenu();
+});
+// Backdrop click closes (same pattern as dev-menu).
+userMenu?.addEventListener("click", (e) => {
+  if (e.target === userMenu) toggleUserMenu();
+});
+// Tab switching. Single delegated listener to keep adding new tabs cheap.
+userMenu?.querySelectorAll<HTMLElement>(".user-tab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    const target = tab.dataset.tab;
+    if (!target) return;
+    userMenu
+      .querySelectorAll(".user-tab")
+      .forEach((t) => t.classList.remove("active"));
+    userMenu
+      .querySelectorAll(".user-pane")
+      .forEach((p) => p.classList.remove("active"));
+    tab.classList.add("active");
+    userMenu
+      .querySelector(`.user-pane[data-pane="${target}"]`)
+      ?.classList.add("active");
+  });
 });
 
 // Click-on-waveform handler. Maps the click x to a song time, then jumps
@@ -706,6 +986,7 @@ function seekToSongTime(songTimeSec: number): void {
   audioSource.connect(audioCtx.destination);
   audioSource.onended = () => {
     running = false;
+    player.releasePointerLock();
   };
   audioStartTime = audioCtx.currentTime - songTimeSec;
   audioSource.start(0, songTimeSec);
@@ -715,6 +996,9 @@ function seekToSongTime(songTimeSec: number): void {
   dead = false;
   running = true;
   titleOverlay?.classList.add("hidden");
+  // Acquire pointer lock — both entry points (waveform click,
+  // RMB-on-death continue) are user gestures, so the browser will grant.
+  player.requestPointerLockIfNeeded();
 }
 
 // Page-level defaults: intercept drags anywhere on the window so a
@@ -766,8 +1050,73 @@ function isAudioFile(f: File): boolean {
 
 // Auto-load the dev song on boot as a dev convenience. Tests depend on
 // this so __getSongAnalysis() has something to return. Drop a different
-// file to replace.
-void loadAndAnalyzeSource(devSong.url, devSong.url.replace(/^\//, ""));
+// file to replace. Marked builtin so it appears in the music tab list
+// without a delete affordance.
+void loadAndAnalyzeSource(devSong.url, devSong.url.replace(/^\//, ""), "builtin");
+
+// Restore previously-uploaded user tracks from IndexedDB. Only the
+// metadata is read at boot — bytes stay on disk until the user clicks a
+// row to play that track. Race with the dev-song auto-load is benign:
+// both call upsertTrack/push and renderTrackList; final list state is
+// the union, with whichever finished last as active.
+async function restoreStoredTracks(): Promise<void> {
+  try {
+    const meta = await listTrackMeta();
+    for (const m of meta) {
+      // Skip duplicates if the same hash arrived via auto-load already.
+      if (tracks.some((t) => t.hash === m.hash)) continue;
+      tracks.push({
+        hash: m.hash,
+        name: m.name,
+        bpm: m.bpm,
+        durationSec: m.durationSec,
+        origin: "user",
+        status: "ready",
+      });
+    }
+    renderTrackList();
+  } catch (err) {
+    console.warn("track restore failed:", err);
+  }
+}
+void restoreStoredTracks();
+
+// Click-to-play. Clicking a track row swaps the active track. For built-
+// ins (currently just dev-song) we re-fetch from /public; for user
+// tracks we hydrate the bytes from IndexedDB and run the same load path
+// as a fresh drop (cache-hit on analysis means it lands fast). The
+// quitToTitle call resets to the title-screen "click to start" state so
+// audio swaps cleanly mid-game without leaving a frozen canvas.
+async function playTrack(hash: string): Promise<void> {
+  if (hash === activeTrackHash) return;
+  const track = tracks.find((t) => t.hash === hash);
+  if (!track) return;
+  // Loading / analyzing / failed rows aren't playable yet — click is a
+  // no-op until status flips to "ready".
+  if (track.status !== "ready") return;
+  quitToTitle();
+  if (track.origin === "builtin") {
+    void loadAndAnalyzeSource(
+      devSong.url,
+      devSong.url.replace(/^\//, ""),
+      "builtin",
+    );
+    return;
+  }
+  try {
+    const bytes = await getTrackBytes(hash);
+    if (!bytes) {
+      console.warn(
+        `stored track ${hash.slice(0, 8)}… missing bytes; removing from list`,
+      );
+      removeUserTrack(hash);
+      return;
+    }
+    void loadAndAnalyzeSource(bytes, track.name, "user");
+  } catch (err) {
+    console.warn("track load failed:", err);
+  }
+}
 
 const tmpLocalPrev = new THREE.Vector3();
 const tmpLocalCurr = new THREE.Vector3();
@@ -833,6 +1182,9 @@ const respawn = () => {
   }
   running = true;
   titleOverlay?.classList.add("hidden");
+  // Re-acquire pointer lock on the gesture that triggered the respawn
+  // (R key or canvas click — both are valid user activations).
+  player.requestPointerLockIfNeeded();
 };
 
 // Walks the built section list backwards from `targetPathS` looking for
@@ -896,6 +1248,9 @@ const quitToTitle = () => {
   running = false;
   paused = false;
   resetToSpawn();
+  // Release pointer lock BEFORE showing the title overlay so the
+  // cursor is freed and visible the moment the UI appears.
+  player.releasePointerLock();
   titleOverlay?.classList.remove("hidden");
 };
 
@@ -960,6 +1315,10 @@ renderer.setAnimationLoop(() => {
     const hit = collisionAcrossStraights(prevWorldPos, camera.position);
     if (hit) {
       dead = true;
+      // Free the cursor immediately so the user can reach the menu,
+      // waveform, etc. while the rewind/vinyl play out — UI is now
+      // in-bounds even though no overlay is shown yet.
+      player.releasePointerLock();
       // Hand pathS over to the rewind controller (camera drifts back
       // along the path with an initial recoil that eases to a slow
       // residual drift). See docs/game-over-rewind-and-vinyl-audio.md.
@@ -999,8 +1358,13 @@ renderer.setAnimationLoop(() => {
 window.addEventListener("keydown", (e) => {
   // Core gameplay keys — always available.
   if (e.code === "KeyR") respawn();
-  else if (e.code === "Escape") quitToTitle();
-  // Dev-only: Space pause, B marker toggle, I invincibility, Tab dev menu.
+  // Esc: close the user menu first if it's open; otherwise fall through
+  // to the gameplay quit-to-title.
+  else if (e.code === "Escape") {
+    if (userMenuOpen()) toggleUserMenu();
+    else quitToTitle();
+  }
+  // Dev-only: Space pause, B marker toggle, I invincibility.
   // M (debug overlay) is gated inside DebugView via its `enabled` option.
   else if (devMode && e.code === "Space") {
     e.preventDefault(); // don't scroll the page
@@ -1010,9 +1374,6 @@ window.addEventListener("keydown", (e) => {
   } else if (devMode && e.code === "KeyI") {
     invincible = !invincible;
     console.log(`invincibility: ${invincible ? "ON" : "OFF"}`);
-  } else if (devMode && e.code === "Tab") {
-    e.preventDefault(); // don't shift focus
-    toggleDevMenu();
   }
 });
 

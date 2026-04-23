@@ -50,7 +50,6 @@
         font-size: clamp(0.75rem, 1.4vw, 1rem);
       }
       #drop-zone {
-        margin-top: 2rem;
         padding: 1rem 2.25rem;
         border: 1px dashed rgba(0, 170, 255, 0.55);
         border-radius: 2px;
@@ -66,12 +65,128 @@
         background: rgba(0, 170, 255, 0.08);
         border-color: rgba(0, 170, 255, 1);
       }
+      .track-list {
+        list-style: none;
+        margin: 0 0 1rem;
+        padding: 0;
+        max-height: 14rem;
+        overflow-y: auto;
+        /* Without explicit overflow-x, `overflow-y: auto` implicitly
+           makes overflow-x auto too, so a long-name row would grow a
+           horizontal scrollbar. Force hidden — the row layout
+           ellipsis-clips long names instead. */
+        overflow-x: hidden;
+      }
+      .track-item {
+        display: flex;
+        align-items: baseline;
+        gap: 1rem;
+        padding: 0.5rem 0.75rem;
+        margin-bottom: 0.4rem;
+        border: 1px solid rgba(0, 170, 255, 0.25);
+        font-size: 0.8rem;
+        opacity: 0.65;
+        transition: opacity 0.15s, border-color 0.15s, background 0.15s;
+      }
+      /* Only ready tracks are clickable / hoverable. The in-flight
+         (loading, analyzing) and terminal (failed) states stay dim and
+         non-interactive — × on user tracks works regardless because
+         that button has its own hover styles. */
+      .track-item.ready {
+        cursor: pointer;
+      }
+      .track-item.ready:hover {
+        opacity: 0.9;
+        border-color: rgba(0, 170, 255, 0.55);
+      }
+      .track-item.loading,
+      .track-item.analyzing,
+      .track-item.failed {
+        opacity: 0.4;
+        cursor: default;
+      }
+      .track-item.failed .track-meta {
+        color: #ff6060;
+      }
+      .track-item.active {
+        opacity: 1;
+        border-color: rgba(0, 170, 255, 0.85);
+        background: rgba(0, 170, 255, 0.08);
+      }
+      .track-name {
+        flex: 1;
+        /* `min-width: 0` overrides the flex default of `min-width:
+           auto`, which would otherwise keep this span at its content's
+           intrinsic width and refuse to honor text-overflow ellipsis. */
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .track-meta {
+        opacity: 0.6;
+        font-size: 0.7rem;
+        white-space: nowrap;
+      }
+      .track-empty {
+        padding: 0.5rem 0.75rem;
+        opacity: 0.4;
+        font-size: 0.75rem;
+      }
+      .track-delete {
+        background: transparent;
+        color: rgba(0, 170, 255, 0.55);
+        border: 1px solid rgba(0, 170, 255, 0.3);
+        width: 1.5rem;
+        height: 1.5rem;
+        font: inherit;
+        font-size: 1rem;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0;
+        flex-shrink: 0;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+      }
+      .track-delete:hover {
+        color: rgba(0, 170, 255, 1);
+        border-color: rgba(0, 170, 255, 0.85);
+        background: rgba(0, 170, 255, 0.08);
+      }
       #title-screen.hidden {
         display: none;
       }
-      /* Tab-toggled developer menu (dev-mode only). Modal-style overlay
-         above the title screen and waveform. */
-      #dev-menu {
+      /* User menu — top-right hamburger toggle + tabbed modal. Sits
+         above the user-menu modal (z-index 22 vs 20) so the hamburger
+         doubles as the close affordance when the menu is open. */
+      #menu-button {
+        position: fixed;
+        top: 1rem;
+        right: 1rem;
+        width: 2.5rem;
+        height: 2.5rem;
+        background: rgba(0, 0, 0, 0.55);
+        border: 1px solid rgba(0, 170, 255, 0.55);
+        cursor: pointer;
+        z-index: 22;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 5px;
+        padding: 0;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      #menu-button:hover {
+        border-color: rgba(0, 170, 255, 1);
+        background: rgba(0, 0, 0, 0.75);
+      }
+      #menu-button span {
+        display: block;
+        width: 1.25rem;
+        height: 2px;
+        background: #00aaff;
+      }
+      #menu {
         position: fixed;
         inset: 0;
         display: flex;
@@ -84,21 +199,49 @@
         letter-spacing: 0;
         z-index: 20;
       }
-      #dev-menu.hidden { display: none; }
-      .dev-modal {
+      #menu.hidden { display: none; }
+      .user-modal {
+        display: flex;
         background: rgba(0, 0, 0, 0.85);
         border: 1px dashed rgba(0, 170, 255, 0.55);
-        padding: 1.5rem 2.25rem;
-        min-width: 18rem;
-        text-align: center;
+        min-width: 32rem;
+        min-height: 18rem;
       }
-      .dev-modal h2 {
-        margin: 0 0 1.25rem;
-        font-weight: 300;
-        font-size: 1rem;
-        opacity: 0.65;
+      .user-tabs {
+        display: flex;
+        flex-direction: column;
+        border-right: 1px dashed rgba(0, 170, 255, 0.35);
+        min-width: 9rem;
       }
-      .dev-modal button {
+      .user-tab {
+        background: transparent;
+        color: #00aaff;
+        border: 0;
+        border-bottom: 1px dashed rgba(0, 170, 255, 0.2);
+        padding: 0.85rem 1.5rem;
+        text-align: left;
+        font: inherit;
+        text-transform: uppercase;
+        letter-spacing: inherit;
+        cursor: pointer;
+        opacity: 0.55;
+        transition: opacity 0.15s, background 0.15s;
+      }
+      .user-tab:hover { opacity: 1; }
+      .user-tab.active {
+        opacity: 1;
+        background: rgba(0, 170, 255, 0.1);
+      }
+      .user-panes {
+        flex: 1;
+        padding: 1.5rem 2rem;
+      }
+      .user-pane { display: none; }
+      .user-pane.active { display: block; }
+      /* Direct-child only — nested controls (like .track-delete inside
+         a list row) need their own sizing and shouldn't inherit the
+         100%-wide placeholder action-button style. */
+      .user-pane > button {
         display: block;
         width: 100%;
         margin: 0.5rem 0;
@@ -112,7 +255,7 @@
         cursor: pointer;
         transition: background 0.15s, border-color 0.15s;
       }
-      .dev-modal button:hover {
+      .user-pane > button:hover {
         background: rgba(0, 170, 255, 0.12);
         border-color: rgba(0, 170, 255, 1);
       }
@@ -122,13 +265,34 @@
     <div id="title-screen">
       <h1>HELLO RUN</h1>
       <p class="subtitle">loading audio…</p>
-      <div id="drop-zone">drag mp3 here or click to browse</div>
-      <input type="file" id="file-picker" accept="audio/*" hidden />
     </div>
-    <div id="dev-menu" class="hidden">
-      <div class="dev-modal">
-        <h2>dev menu</h2>
-        <button id="dev-clear-cache">clear track analysis</button>
+    <input type="file" id="file-picker" accept="audio/*" hidden />
+    <button id="menu-button" type="button" aria-label="menu">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+    <div id="menu" class="hidden">
+      <div class="user-modal">
+        <nav class="user-tabs">
+          <button class="user-tab active" type="button" data-tab="settings">settings</button>
+          <button class="user-tab" type="button" data-tab="music">music</button>
+          <button class="user-tab" type="button" data-tab="dev" data-dev-only>dev</button>
+        </nav>
+        <div class="user-panes">
+          <section class="user-pane active" data-pane="settings">
+            <button type="button">action one</button>
+          </section>
+          <section class="user-pane" data-pane="music">
+            <ul id="track-list" class="track-list">
+              <li class="track-empty">no tracks loaded yet</li>
+            </ul>
+            <div id="drop-zone">drag mp3 here or click to browse</div>
+          </section>
+          <section class="user-pane" data-pane="dev" data-dev-only>
+            <button id="dev-clear-cache" type="button">clear track analysis</button>
+          </section>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

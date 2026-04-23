@@ -50,11 +50,10 @@ Append to `http://localhost:5173/?...`:
 | B | dev | Toggle markers (beat / bar / phrase / period squares) |
 | M | dev | Toggle debug overlay (top-down ortho view) |
 | I | dev | Toggle invincibility |
-| Tab | dev | Toggle dev menu modal |
 
-## Dev menu
+## User menu — `dev` tab
 
-Tab-toggled modal overlay. Currently hosts:
+Hamburger (top-right) → `dev` tab. Tab + pane carry `data-dev-only` and are removed from the DOM at startup in non-dev builds. Currently hosts:
 - **Clear track analysis** — calls `clearAnalysisCache()`, sweeps every `hr2-analysis-v*` key from localStorage. Next page load re-analyzes from scratch.
 
 ## Analysis cache

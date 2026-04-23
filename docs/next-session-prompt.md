@@ -17,7 +17,7 @@ We're continuing work on **HelloRun 2**, a first-person rhythm runner. Read `CLA
 
 **Dev-song result**: 20 sections coalesced into 2 kinds (loud-mix vs quiet-breakdown). Dance track structure reads correctly.
 
-**`run npm run dev` then visit `?dev` (or just dev-server)**, press Tab for the dev menu (currently has "clear track analysis" only), Space pauses, B toggles markers, M is the top-down debug.
+**`run npm run dev` then visit `?dev` (or just dev-server)**, click the top-right hamburger → dev tab for "clear track analysis", Space pauses, B toggles markers, M is the top-down debug.
 
 ## What we're doing this session
 
