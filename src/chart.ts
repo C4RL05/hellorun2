@@ -1,8 +1,11 @@
-// Procedural chart generation (plan §7 milestone 7).
+// Procedural chart generation (plan §7 milestone 7, §5 milestone 9).
 //
-// A "phrase" is a 3-gate sequence through vertical space — the atom of
-// chart composition. The full chart for N gates is built by concatenating
-// phrases, obeying:
+// A "phrase" is an N-gate slot sequence — the atom of chart composition.
+// Most phrases are 3 gates; sweep phrases are 5–6 gates, intentionally
+// near-monotone so they read as smooth rushes at peak density.
+//
+// The generator concatenates phrases to produce exactly `gateCount` slots,
+// obeying:
 //
 //   - First-phrase spawn-safety: phrase[0].slots[0] === 1 (player spawns
 //     at mid, can't react to gate 0 in time if it's at top/bottom).
@@ -46,6 +49,27 @@ export const PHRASES: readonly Phrase[] = [
   { slots: [2, 0, 2], difficulty: 4 },
 ];
 
+// Long "sweep" atoms used for peak-density straights (5–6 gates). All
+// near-monotone or gently wavy — at one gate per beat the player cannot
+// reliably react to anything with 2-slot jumps, so these intentionally
+// keep slot deltas to 0 or 1. preferSweeps in DENSITY_TIERS selects them.
+export const SWEEP_PHRASES: readonly Phrase[] = [
+  // 5-gate sweeps.
+  { slots: [0, 0, 1, 2, 2],       difficulty: 1 }, // bottom → top ramp
+  { slots: [2, 2, 1, 0, 0],       difficulty: 1 }, // top → bottom ramp
+  { slots: [1, 0, 0, 1, 2],       difficulty: 2 }, // dip then climb
+  { slots: [1, 2, 2, 1, 0],       difficulty: 2 }, // rise then fall
+  { slots: [0, 1, 1, 1, 2],       difficulty: 1 }, // slow climb, mid hold
+  { slots: [2, 1, 1, 1, 0],       difficulty: 1 }, // slow descent, mid hold
+  // 6-gate sweeps.
+  { slots: [0, 0, 1, 1, 2, 2],    difficulty: 1 }, // staircase up
+  { slots: [2, 2, 1, 1, 0, 0],    difficulty: 1 }, // staircase down
+  { slots: [0, 1, 2, 2, 1, 0],    difficulty: 2 }, // up-and-back
+  { slots: [2, 1, 0, 0, 1, 2],    difficulty: 2 }, // down-and-back
+  { slots: [1, 0, 0, 1, 2, 2],    difficulty: 2 }, // mid-dip-climb-hold
+  { slots: [1, 2, 2, 1, 0, 0],    difficulty: 2 }, // mid-peak-fall-hold
+];
+
 export interface GenerateOptions {
   readonly maxDifficulty?: number;
   // Explicit PRNG for deterministic charts in tests. Defaults to
@@ -56,6 +80,11 @@ export interface GenerateOptions {
   // rolling section generation so each new section picks phrases
   // consistent with the previous section's last gate.
   readonly prevEndSlot?: number;
+  // If set, try a sweep atom first (matching gateCount in length,
+  // filtered by difficulty + continuity). Falls back to 3-gate phrase
+  // concatenation if no sweep fits. Only meaningful when gateCount ≥ 5 —
+  // the SWEEP_PHRASES table has no shorter entries.
+  readonly preferSweeps?: boolean;
 }
 
 // Builds a chart of `gateCount` slot indices by concatenating phrases.
@@ -65,10 +94,19 @@ export function generateChart(
 ): number[] {
   const maxDifficulty = options.maxDifficulty ?? 4;
   const rand = options.rand ?? Math.random;
+  const hasPrev = options.prevEndSlot !== undefined;
+  const prevEndSlot0 = hasPrev ? (options.prevEndSlot as number) : 1;
+
+  // Fast path: pick a sweep atom when the caller asks for peak density
+  // and the length matches. Keeps the whole straight coherent (monotone
+  // shape) instead of stitching it from random 3-gate chunks.
+  if (options.preferSweeps && gateCount >= 5) {
+    const sweep = pickSweep(gateCount, maxDifficulty, hasPrev, prevEndSlot0, rand);
+    if (sweep) return [...sweep.slots];
+  }
 
   const out: number[] = [];
-  const hasPrev = options.prevEndSlot !== undefined;
-  let prevEndSlot = hasPrev ? (options.prevEndSlot as number) : 1;
+  let prevEndSlot = prevEndSlot0;
   let isFirst = !hasPrev;
 
   while (out.length < gateCount) {
@@ -112,6 +150,27 @@ function pickContinuationPhrase(
     PHRASES.filter((p) => Math.abs(p.slots[0] - prevEndSlot) <= 1),
     rand,
   );
+}
+
+// Pick a sweep atom of the exact length, obeying difficulty + continuity.
+// Returns null if nothing fits — caller falls back to stitched 3-gate
+// concatenation. On the very first straight (no prevEnd), enforces the
+// slot-1 spawn-safety rule just like pickFirstPhrase does for 3-gate atoms.
+function pickSweep(
+  gateCount: number,
+  maxDifficulty: number,
+  hasPrev: boolean,
+  prevEndSlot: number,
+  rand: () => number,
+): Phrase | null {
+  const candidates = SWEEP_PHRASES.filter((p) => {
+    if (p.slots.length !== gateCount) return false;
+    if (p.difficulty > maxDifficulty) return false;
+    if (hasPrev) return Math.abs(p.slots[0] - prevEndSlot) <= 1;
+    return p.slots[0] === 1;
+  });
+  if (candidates.length === 0) return null;
+  return pickRandom(candidates, rand);
 }
 
 function pickRandom<T>(xs: readonly T[], rand: () => number): T {

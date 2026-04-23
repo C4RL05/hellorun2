@@ -14,7 +14,7 @@ const browser = await chromium.launch({ channel: "chromium" });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 
 await page.goto(URL, { waitUntil: "networkidle", timeout: 15_000 });
-await page.waitForSelector("canvas");
+await page.waitForSelector("#game-canvas");
 await page.waitForFunction(() => window.__setPathS !== undefined, {
   timeout: 5_000,
 });

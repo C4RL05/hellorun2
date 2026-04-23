@@ -3,8 +3,8 @@ import { TURN_ARC_LENGTH, TURN_RADIUS, TUNNEL_DEPTH, CELL } from "./constants";
 
 // Length of one straight section's path span (world units). Uniform across
 // all straights — both initial and generated. At the beat-locked forward
-// speed this equals BEATS_PER_STRAIGHT beats exactly (derivable from
-// GATE_SPACING × BEATS_PER_STRAIGHT / BEATS_PER_GATE).
+// speed this equals BEATS_PER_STRAIGHT beats exactly (= BEAT_LENGTH ×
+// BEATS_PER_STRAIGHT).
 export const STRAIGHT_LENGTH = TUNNEL_DEPTH * CELL;
 
 // A section is one span of the infinite corridor. The path scalar pathS

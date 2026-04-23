@@ -7,13 +7,11 @@ import type { Gate } from "../collision";
 import {
   BARRIER_CELLS_WIDE,
   BARRIER_OPACITY,
+  BEAT_LENGTH,
   CELL,
   COLOR_BARRIER,
   COLOR_BARRIER_EDGE,
   EDGE_WIDTH_PX,
-  FIRST_GATE_Z,
-  GATE_COUNT,
-  GATE_SPACING,
   GATE_THICKNESS,
   SLOT_COUNT,
 } from "../constants";
@@ -32,14 +30,23 @@ export interface GatesScene {
 
 // Builds all gates for the straight as a single merged mesh + fat-line
 // edges. Each gate is SLOT_COUNT slots stacked vertically, with the open
-// slot simply omitted from the merge (no barrier there). `openSlots[i]`
-// is the open slot for gate i; length must equal GATE_COUNT.
-export function createGates(openSlots: readonly number[]): GatesScene {
-  if (openSlots.length !== GATE_COUNT) {
+// slot simply omitted from the merge (no barrier there).
+//
+// `openSlots[i]` is the open slot for gate i. `beats[i]` is the beat
+// number (1-indexed from the straight's start) where gate i lands — gate
+// z in the straight's local frame is `-beats[i] × BEAT_LENGTH`. The two
+// arrays must be the same length and chronologically ordered (beats[0]
+// is the earliest gate in the straight).
+export function createGates(
+  openSlots: readonly number[],
+  beats: readonly number[],
+): GatesScene {
+  if (openSlots.length !== beats.length) {
     throw new Error(
-      `createGates: openSlots length ${openSlots.length} !== GATE_COUNT ${GATE_COUNT}`,
+      `createGates: openSlots length ${openSlots.length} !== beats length ${beats.length}`,
     );
   }
+  const gateCount = openSlots.length;
   const data: Gate[] = [];
   const barriers: BarrierInfo[] = [];
   const fills: THREE.BufferGeometry[] = [];
@@ -62,15 +69,15 @@ export function createGates(openSlots: readonly number[]): GatesScene {
   const matrix = new THREE.Matrix4();
 
   // Build chart data in logical order (gate 0 = first chronologically).
-  for (let i = 0; i < GATE_COUNT; i++) {
-    const z = FIRST_GATE_Z - i * GATE_SPACING;
+  for (let i = 0; i < gateCount; i++) {
+    const z = -beats[i] * BEAT_LENGTH;
     data.push({ z, openSlot: openSlots[i] });
   }
 
   // Build geometry far→near so the merged transparent mesh composites
   // correctly back-to-front. (three.js doesn't sort triangles within a
   // single mesh; it draws them in index order.)
-  for (let i = GATE_COUNT - 1; i >= 0; i--) {
+  for (let i = gateCount - 1; i >= 0; i--) {
     const gate = data[i];
     for (let s = 0; s < SLOT_COUNT; s++) {
       if (s === gate.openSlot) continue;

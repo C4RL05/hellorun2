@@ -20,10 +20,9 @@ import {
   DEATH_REWIND_RECOIL_SPEED,
   DEATH_VINYL_CUT_THRESHOLD,
   DEATH_VINYL_RAMP_PER_SEC,
-  FIRST_GATE_Z,
+  DEFAULT_DENSITY_TIER,
+  DENSITY_TIERS,
   FORWARD_SPEED,
-  GATE_COUNT,
-  GATE_SPACING,
   MARKER_BAR_COLOR,
   MARKER_BAR_SIZE,
   MARKER_BEAT_COLOR,
@@ -34,11 +33,14 @@ import {
   MARKER_PERIOD_SIZE,
   PERIOD_LENGTH,
   PHRASE_LENGTH,
+  SAME_KIND_DIFFICULTY_BUMP_EVERY,
+  SAME_KIND_TIER_BUMP_EVERY,
   SECTION_EDGE_PALETTE,
   TURN_ARC_LENGTH,
   TURN_RADIUS,
   forwardSpeedForBpm,
 } from "./constants";
+import type { DensityTier } from "./constants";
 import {
   STRAIGHT_LENGTH,
   samplePath,
@@ -83,6 +85,11 @@ import { WaveformOverlay } from "./waveform";
 import { devSong } from "./songs";
 
 const canvas = document.createElement("canvas");
+// Stable id so Playwright tools can target the game canvas unambiguously.
+// The track-editor modal also owns a <canvas id="editor-waveform"> — a bare
+// "canvas" selector resolves to the first in DOM order and picks the
+// (hidden, modal-gated) editor one. Give the game canvas its own id.
+canvas.id = "game-canvas";
 document.body.appendChild(canvas);
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -118,6 +125,12 @@ interface StraightObj {
   readonly group: THREE.Object3D;
   readonly gates: readonly Gate[];
   readonly openSlots: readonly number[];
+  // Beat indices (1-based from the straight's start) at which this
+  // section's gates were placed. Parallel to `gates` and `openSlots`.
+  // Tracked so dev tools can report per-gate beat timing without having
+  // to invert the z → beat math, and so future editor tooling can show
+  // the density tier used per straight.
+  readonly beats: readonly number[];
   readonly barriers: readonly BarrierInfo[];
   readonly cubeTransforms: readonly THREE.Matrix4[];
   // Tunnel-edge LineMaterial only — barrier edges (gates.edgeMaterial)
@@ -162,12 +175,13 @@ const CUBE_EDGES = new THREE.EdgesGeometry(
 
 function buildStraightObj(
   openSlots: readonly number[],
+  beats: readonly number[],
   name: string,
   edgeColor: number,
 ): StraightObj {
   const tunnel = createTunnel();
   tunnel.edgeMaterial.color.setHex(edgeColor);
-  const gates = createGates(openSlots);
+  const gates = createGates(openSlots, beats);
   edgeMaterials.push(tunnel.edgeMaterial, gates.edgeMaterial);
   const group = new THREE.Group();
   group.name = name;
@@ -177,6 +191,7 @@ function buildStraightObj(
     group,
     gates: gates.data,
     openSlots,
+    beats,
     barriers: gates.barriers,
     cubeTransforms: tunnel.cubeTransforms,
     tunnelEdgeMaterial: tunnel.edgeMaterial,
@@ -204,14 +219,66 @@ function audioSectionForPathS(s: number): AudioSection | null {
   return secs.length > 0 ? secs[secs.length - 1] : null;
 }
 
-// Loudness → maxDifficulty bucket. Quiet sections (breakdowns, intros)
-// get easy phrases; loudest sections unlock the bouncy D=4 stuff. Linear
-// quartiles relative to the song's own peak loudness — keeps difficulty
-// distribution stable across songs with different absolute loudness.
-function maxDifficultyForSection(audioSection: AudioSection | null): number {
-  if (!audioSection || songMaxLoudness <= 0) return 4;
+// How many prior audio sections of the same kind appear before this one
+// in songAnalysis.sections[]. 0 for the first chorus, 1 for the second,
+// etc. Derived on-the-fly so there's no mutable state to keep in sync
+// with analysis recomputes.
+//
+// Important: this counts AUDIO sections, not corridor straights. A single
+// 64-beat chorus maps to ~9 corridor straights; all 9 must share the
+// same `sameKindIndex` so the ramp reflects chorus-to-chorus progression,
+// not build-up *within* one chorus. An earlier iteration incremented a
+// per-kind counter each corridor straight, which compounded the ramp
+// ~8× faster than intended.
+function sameKindIndexOf(audioSection: AudioSection): number {
+  if (!songAnalysis) return 0;
+  let idx = 0;
+  for (const s of songAnalysis.sections) {
+    if (s === audioSection) return idx;
+    if (s.kind === audioSection.kind) idx++;
+  }
+  return idx;
+}
+
+// Resolves the density tier for a given audio section. Loudness maps to
+// a base tier index (quintile of avgLoudness / songMaxLoudness); then
+// the audio-section repeat index bumps both the tier and maxDifficulty
+// upward so a repeating chorus stacks challenge without visually
+// changing kind.
+//
+// Returns the tier object itself (beats/count/preferSweeps/maxDifficulty)
+// plus the ramped-and-clamped maxDifficulty, which overrides
+// tier.maxDifficulty for this call. Callers pass the effective difficulty
+// separately so they don't mutate the shared DENSITY_TIERS table.
+interface ResolvedTier {
+  readonly tier: DensityTier;
+  readonly maxDifficulty: number;
+}
+function densityTierForSection(audioSection: AudioSection | null): ResolvedTier {
+  if (!audioSection || songMaxLoudness <= 0) {
+    const tier = DENSITY_TIERS[DEFAULT_DENSITY_TIER];
+    return { tier, maxDifficulty: tier.maxDifficulty };
+  }
   const t = audioSection.avgLoudness / songMaxLoudness;
-  return Math.min(4, Math.max(1, 1 + Math.floor(t * 4)));
+  // Ternary: baseline caps at tier 2 (4 gates). Tier 3 and 4 — the
+  // 5- and 6-gate sweep tiers — are only ever reached through the
+  // repeat ramp below. That way the first chorus of any song plays at
+  // a moderate density and the song *grows* on you. Dev-song loud
+  // sections used to land directly at tier 4 on first listen, which
+  // felt like an instant firehose.
+  const baseTier = Math.min(
+    DENSITY_TIERS.length - 3,
+    Math.max(0, Math.floor(t * (DENSITY_TIERS.length - 2))),
+  );
+
+  const repeats = sameKindIndexOf(audioSection);
+  const tierBump = Math.floor(repeats / SAME_KIND_TIER_BUMP_EVERY);
+  const diffBump = Math.floor(repeats / SAME_KIND_DIFFICULTY_BUMP_EVERY);
+
+  const tierIdx = Math.min(DENSITY_TIERS.length - 1, baseTier + tierBump);
+  const tier = DENSITY_TIERS[tierIdx];
+  const maxDifficulty = Math.min(4, tier.maxDifficulty + diffBump);
+  return { tier, maxDifficulty };
 }
 
 function edgeColorForSection(audioSection: AudioSection | null): number {
@@ -229,16 +296,19 @@ function appendSection(section: Section): void {
     return;
   }
   const audioSec = audioSectionForPathS(section.pathStart);
-  const openSlots = generateChart(GATE_COUNT, {
+  const { tier, maxDifficulty } = densityTierForSection(audioSec);
+  const openSlots = generateChart(tier.count, {
     rand: chartRand,
     prevEndSlot: prevEndSlot ?? undefined,
-    maxDifficulty: maxDifficultyForSection(audioSec),
+    maxDifficulty,
+    preferSweeps: tier.preferSweeps,
   });
   prevEndSlot = openSlots[openSlots.length - 1];
   chart.push(...openSlots);
   const idx = straightObjects.length;
   const obj = buildStraightObj(
     openSlots,
+    tier.beats,
     `straight-${idx}`,
     edgeColorForSection(audioSec),
   );
@@ -1624,10 +1694,16 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-canvas.addEventListener("click", () => {
+// LMB on the game canvas. Only used for the game-start click (title
+// screen) and the LMB-when-dead respawn. During active play LMB is
+// intentionally inert — beat-sync is too disruptive to risk triggering
+// accidentally, so it lives on RMB (see the mousedown(button===2)
+// handler below). mousedown+button===0 is explicit; the `click` event
+// can leak RMB in some Chromium-on-Windows configurations.
+canvas.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
   if (!running && audioBuffer) startGame();
   else if (dead) respawn();
-  else syncFromCurrentMoment();
 });
 
 // Beat-grid resync: treat the current playback moment as beat 1.
@@ -1713,15 +1789,18 @@ function flashSync(): void {
   flash.classList.add("flashing");
 }
 
-// RMB-on-death = continue from the previous turn (a partial-restart that
-// preserves song progress). preventDefault stops the contextmenu from
-// flashing on the brief mousedown→up window. mousedown rather than click
-// because a right-click never fires the `click` event in browsers.
+// RMB on the game canvas:
+//   - dead  → continue from the previous turn (partial-restart that
+//             preserves song progress)
+//   - alive → beat-sync the grid to this moment
+// preventDefault stops the contextmenu flashing on the brief mousedown→up
+// window. mousedown rather than click because right-click doesn't fire
+// the `click` event in browsers.
 canvas.addEventListener("mousedown", (e) => {
-  if (e.button === 2 && dead) {
-    e.preventDefault();
-    continueFromPreviousTurn();
-  }
+  if (e.button !== 2) return;
+  e.preventDefault();
+  if (dead) continueFromPreviousTurn();
+  else if (running) syncFromCurrentMoment();
 });
 
 // Suppress the browser's right-click context menu globally — RMB is a
@@ -1769,11 +1848,15 @@ if (import.meta.env.DEV) {
   // detection flips the speed.
   (w as unknown as { __getGateTimesMs: () => number[] }).__getGateTimesMs = () => {
     const times: number[] = [];
-    for (const sec of sections) {
+    for (let i = 0; i < sections.length; i++) {
+      const sec = sections[i];
       if (sec.kind !== "straight") continue;
-      for (let i = 0; i < GATE_COUNT; i++) {
-        const localPathAtGate = -FIRST_GATE_Z + i * GATE_SPACING;
-        const globalPathAtGate = sec.pathStart + localPathAtGate;
+      const obj = straightObjects[i];
+      if (!obj) continue;
+      // Gate z is local, negative; -z = forward distance from the
+      // straight's entry point (pathStart).
+      for (const gate of obj.gates) {
+        const globalPathAtGate = sec.pathStart + -gate.z;
         times.push(Math.round((globalPathAtGate / currentForwardSpeed) * 1000));
       }
     }
@@ -1781,6 +1864,46 @@ if (import.meta.env.DEV) {
   };
   (w as unknown as { __getForwardSpeed: () => number }).__getForwardSpeed = () =>
     currentForwardSpeed;
+  // Per-straight layout: index into sections[], beats used, open slots,
+  // and the audio section kind (or null before/outside analysis). Lets
+  // the density-check tool assert tier behavior without reaching into
+  // private module state. Flat chart ordering by build order — parallel
+  // to __getChart's slot sequence.
+  (w as unknown as {
+    __getStraightLayout: () => Array<{
+      sectionIndex: number;
+      pathStart: number;
+      beats: number[];
+      openSlots: number[];
+      audioKind: number | null;
+      audioLoudness: number | null;
+    }>;
+  }).__getStraightLayout = () => {
+    const out: Array<{
+      sectionIndex: number;
+      pathStart: number;
+      beats: number[];
+      openSlots: number[];
+      audioKind: number | null;
+      audioLoudness: number | null;
+    }> = [];
+    for (let i = 0; i < sections.length; i++) {
+      const sec = sections[i];
+      if (sec.kind !== "straight") continue;
+      const obj = straightObjects[i];
+      if (!obj) continue;
+      const audioSec = audioSectionForPathS(sec.pathStart);
+      out.push({
+        sectionIndex: i,
+        pathStart: sec.pathStart,
+        beats: [...obj.beats],
+        openSlots: [...obj.openSlots],
+        audioKind: audioSec ? audioSec.kind : null,
+        audioLoudness: audioSec ? audioSec.avgLoudness : null,
+      });
+    }
+    return out;
+  };
   (w as unknown as {
     __getCorridor: () => {
       straightLength: number;

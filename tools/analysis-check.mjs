@@ -20,7 +20,7 @@ page.on("console", (msg) => {
 
 try {
   await page.goto(URL, { waitUntil: "networkidle", timeout: 15_000 });
-  await page.waitForSelector("canvas");
+  await page.waitForSelector("#game-canvas");
   await page.waitForFunction(() => window.__getSongAnalysis !== undefined, {
     timeout: 5_000,
   });

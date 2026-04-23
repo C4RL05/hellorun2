@@ -14,7 +14,7 @@ const readY = () => page.evaluate(() => window.__camera.position.y);
 
 try {
   await page.goto(URL, { waitUntil: "networkidle", timeout: 15_000 });
-  await page.waitForSelector("canvas");
+  await page.waitForSelector("#game-canvas");
   await page.evaluate(
     () =>
       new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
@@ -56,7 +56,7 @@ try {
   await page.mouse.click(640, 360);
   const locked = await page
     .waitForFunction(
-      () => document.pointerLockElement === document.querySelector("canvas"),
+      () => document.pointerLockElement === document.querySelector("#game-canvas"),
       { timeout: 2_000 },
     )
     .then(() => true)

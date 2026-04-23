@@ -30,7 +30,7 @@ export const CAMERA_FAR = 200;
 export const CAMERA_START = { x: 0, y: 0, z: 0 };
 
 // Default forward speed (world units / second), corresponding to DEFAULT_BPM
-// at the current GATE_SPACING and BEATS_PER_GATE. Used when no song has been
+// at one beat per BEAT_LENGTH world units. Used when no song has been
 // analyzed yet (fallback for wall-clock tests) or as a baseline before
 // analysis completes. Runtime speed is derived from detected BPM — see
 // `forwardSpeedForBpm` below and `currentForwardSpeed` in `main.ts`.
@@ -86,28 +86,69 @@ export const CUBE_JITTER_DEG = 10;
 // screen-space triangle-strip lines instead.
 export const EDGE_WIDTH_PX = 2;
 
-// Gates (plan §2, milestones 4 and 7).
+// Gates (plan §2, milestones 4 and 7; §5 section-driven density).
 //
 // Each 2-bar phrase (8 beats at 4/4) breaks into 7 straight-beats + 1
-// turn-beat, so BEATS_PER_STRAIGHT = 7. BEATS_PER_GATE is the gate cadence:
-// 4 means one gate every 4 beats, giving 2 gates per straight at beats
-// FIRST_GATE_BEAT (= 2) and FIRST_GATE_BEAT + BEATS_PER_GATE (= 6). Drop
-// BEATS_PER_GATE to 2 for a denser feel once M8 section energy wires in.
+// turn-beat, so BEATS_PER_STRAIGHT = 7. BEAT_LENGTH is the primitive that
+// couples world units to beats — TUNNEL_DEPTH × CELL / BEATS_PER_STRAIGHT
+// = 35/7 = 5 u/beat. Everything beat-related (gate z, turn length, marker
+// intervals) derives from it, so swapping BEATS_PER_STRAIGHT propagates
+// cleanly.
 //
-// BEAT_LENGTH is the primitive that couples world units to beats —
-// TUNNEL_DEPTH × CELL / BEATS_PER_STRAIGHT = 35/7 = 5 u/beat. Everything
-// beat-related (gate spacing, turn length, marker intervals) derives from
-// it, so swapping BEATS_PER_STRAIGHT propagates cleanly.
+// Gate placement is no longer a uniform global. Each straight picks a
+// density tier (from audio-section loudness + per-kind repeat count) that
+// names the exact beats to place gates on. See DENSITY_TIERS below and
+// the wiring in main.ts::appendSection.
 export const BEATS_PER_STRAIGHT = 7;
 export const BEAT_LENGTH = (TUNNEL_DEPTH * CELL) / BEATS_PER_STRAIGHT;
-export const BEATS_PER_GATE = 4;
-export const FIRST_GATE_BEAT = 2;
-export const GATE_SPACING = BEATS_PER_GATE * BEAT_LENGTH;
-export const GATE_COUNT =
-  Math.floor((BEATS_PER_STRAIGHT - FIRST_GATE_BEAT) / BEATS_PER_GATE) + 1;
-export const FIRST_GATE_Z = -FIRST_GATE_BEAT * BEAT_LENGTH;
 export const GATE_THICKNESS = 0.15;
 export const SLOT_COUNT = 3;
+
+// Beats where a gate is allowed to live. Beat 1 is excluded because the
+// camera has just exited a turn and the hard-reveal rule (plan §2) means
+// the player needs a beat to read the straight. Beat 7 (= BEATS_PER_STRAIGHT)
+// lands right at the turn mouth — deliberately kept eligible so peak-density
+// straights can punch a last decision into the corner entry.
+export const GATE_ELIGIBLE_BEATS: readonly number[] = [2, 3, 4, 5, 6, 7];
+
+// Density tiers. Each straight's audio section maps (normalized loudness +
+// repeat-count ramp) to one of these. The beats array IS the placement —
+// gate i lands at z = -tier.beats[i] × BEAT_LENGTH. maxDifficulty caps the
+// phrase-vocabulary difficulty. preferSweeps gates whether the generator
+// reaches for SWEEP_PHRASES (long monotone atoms) first; paired with high
+// counts so 5–6 gates read as smooth rushes rather than random walls.
+//
+// Rationale for the high-count caps: at 5–6 gates, stitching random 3-gate
+// phrases tends toward middling zig-zag. Low maxDifficulty + preferSweeps
+// keeps peak density readable — the difficulty signal comes from "so many
+// decisions" rather than "each decision is a 2-slot jump."
+export interface DensityTier {
+  readonly count: number;
+  readonly beats: readonly number[];
+  readonly maxDifficulty: number;
+  readonly preferSweeps: boolean;
+}
+export const DENSITY_TIERS: readonly DensityTier[] = [
+  { count: 2, beats: [2, 6],             maxDifficulty: 2, preferSweeps: false }, // quiet
+  { count: 3, beats: [2, 4, 6],          maxDifficulty: 3, preferSweeps: false }, // low-med
+  { count: 4, beats: [2, 4, 6, 7],       maxDifficulty: 3, preferSweeps: false }, // med-high
+  { count: 5, beats: [2, 3, 5, 6, 7],    maxDifficulty: 2, preferSweeps: true  }, // high
+  { count: 6, beats: [2, 3, 4, 5, 6, 7], maxDifficulty: 2, preferSweeps: true  }, // peak
+];
+
+// Default tier index (used on the first straight or two before analysis lands,
+// and as the neutral fallback when no audio section covers a given pathS).
+// Tier 1 gives 3 gates at beats 2/4/6 — the most "normal" feel.
+export const DEFAULT_DENSITY_TIER = 1;
+
+// Per-kind ramp. Each time the same audio-section kind is entered again,
+// we bump the tier index and/or maxDifficulty. Keeps a repeating chorus
+// from feeling identical on each pass without changing its palette.
+//  - TIER_BUMP_EVERY = 2 → second repeat +0, third repeat +1, fourth +1, fifth +2.
+//  - DIFFICULTY_BUMP_EVERY = 1 → every repeat nudges the pattern cap +1.
+// Both bumps are clamped against DENSITY_TIERS.length - 1 and maxDifficulty 4.
+export const SAME_KIND_TIER_BUMP_EVERY = 2;
+export const SAME_KIND_DIFFICULTY_BUMP_EVERY = 1;
 // Number of horizontal cells per barrier slab. At BARRIER_CELLS_WIDE=4 and
 // slotHeight=CELL/SLOT_COUNT, the barrier is 4 × slotHeight wide × slotHeight
 // tall — visible face is 4 square cells outlined by the edge material
@@ -124,14 +165,14 @@ export const COLOR_BARRIER_EDGE = 0xff2020;
 //
 // Source of truth is TURN_BEATS — how many beats the turn takes. Plan §7 M5:
 // "camera arc during beat 4" → 1 beat. At the beat-locked forward speed the
-// camera covers `GATE_SPACING × TURN_BEATS / BEATS_PER_GATE` world units per
-// turn (BPM-independent: FORWARD_SPEED scales with BPM, and so does the
+// camera covers `BEAT_LENGTH × TURN_BEATS` world units per turn
+// (BPM-independent: FORWARD_SPEED scales with BPM, and so does the
 // wall-clock time, so distance cancels). Given the arc is a quarter circle,
 // `TURN_RADIUS = 2 × arc / π` — so the turn lands exactly on the next beat
 // regardless of tempo. Bump TURN_BEATS to 2 for a gentler (bigger radius)
 // sweep at the cost of a longer musical rest between sections.
 export const TURN_BEATS = 1;
-export const TURN_ARC_LENGTH = (GATE_SPACING * TURN_BEATS) / BEATS_PER_GATE;
+export const TURN_ARC_LENGTH = BEAT_LENGTH * TURN_BEATS;
 export const TURN_RADIUS = (2 * TURN_ARC_LENGTH) / Math.PI;
 
 // Fill opacity for barrier slabs. The bright red edges are opaque so the
@@ -179,11 +220,11 @@ if (TUNNEL_WIDTH % 2 === 0 || TUNNEL_HEIGHT % 2 === 0) {
 }
 
 // World-space forward speed needed for gates to land on beats at the given
-// BPM. Derivation: time between gates = BEATS_PER_GATE × (60/bpm); that time
-// must equal GATE_SPACING / speed, so speed = GATE_SPACING × bpm / (BEATS_PER_GATE × 60).
+// BPM. Derivation: time between beats = 60/bpm; that time must equal
+// BEAT_LENGTH / speed, so speed = BEAT_LENGTH × bpm / 60.
 // At bpm=DEFAULT_BPM this returns FORWARD_SPEED by construction.
 export function forwardSpeedForBpm(bpm: number): number {
-  return (GATE_SPACING * bpm) / (BEATS_PER_GATE * 60);
+  return (BEAT_LENGTH * bpm) / 60;
 }
 
 // Game-over effects (see docs/game-over-rewind-and-vinyl-audio.md).

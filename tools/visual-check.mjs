@@ -35,7 +35,7 @@ page.on("console", (msg) => {
 
 try {
   await page.goto(URL, { waitUntil: "networkidle", timeout: 15_000 });
-  await page.waitForSelector("canvas", { timeout: 5_000 });
+  await page.waitForSelector("#game-canvas", { timeout: 5_000 });
   // Dismiss the title overlay and enable motion so screenshots capture
   // live gameplay rather than the paused spawn pose.
   await page.waitForFunction(() => window.__startGame !== undefined, {
