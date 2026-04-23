@@ -46,7 +46,7 @@ import {
   nextTurnAfter,
 } from "./corridor";
 import type { Section } from "./corridor";
-import { analyzeAudio } from "./audio-analysis/analyzer";
+import { analyzeAudio, recomputeSections } from "./audio-analysis/analyzer";
 import type {
   Section as AudioSection,
   SongAnalysis,
@@ -64,6 +64,8 @@ import {
   listTrackMeta,
   putTrack as putStoredTrack,
 } from "./track-storage";
+import { TrackEditor } from "./track-editor";
+import type { TrackEditPatch } from "./track-editor";
 import { generateChart, mulberry32 } from "./chart";
 import { PlayerController } from "./player";
 import { createGates } from "./scene/gates";
@@ -574,6 +576,12 @@ function renderTrackList(): void {
   // could contain HTML chars; hash is hex so safe to inline raw.
   const rows = ordered.map((t) => {
     const active = t.hash === activeTrackHash ? " active" : "";
+    // Edit affordance available on every ready track (built-ins
+    // included — analyzer can be wrong on bundled tracks too).
+    const editBtn =
+      t.status === "ready"
+        ? `<button class="track-edit" type="button" data-hash="${t.hash}" aria-label="edit track">✎</button>`
+        : "";
     const deleteBtn =
       t.origin === "user"
         ? `<button class="track-delete" type="button" data-hash="${t.hash}" aria-label="remove track">×</button>`
@@ -595,6 +603,7 @@ function renderTrackList(): void {
       `<li class="track-item ${t.status}${active}" data-hash="${t.hash}">` +
       `<span class="track-name">${escapeHtml(t.name)}</span>` +
       `<span class="track-meta">${meta}</span>` +
+      editBtn +
       deleteBtn +
       `</li>`
     );
@@ -611,6 +620,11 @@ document.getElementById("track-list")?.addEventListener("click", (e) => {
   if (target.classList.contains("track-delete")) {
     const hash = target.dataset.hash;
     if (hash) removeUserTrack(hash);
+    return;
+  }
+  if (target.classList.contains("track-edit")) {
+    const hash = target.dataset.hash;
+    if (hash) void openEditorForTrack(hash);
     return;
   }
   const row = target.closest(".track-item") as HTMLElement | null;
@@ -1087,6 +1101,184 @@ void restoreStoredTracks();
 // as a fresh drop (cache-hit on analysis means it lands fast). The
 // quitToTitle call resets to the title-screen "click to start" state so
 // audio swaps cleanly mid-game without leaving a frozen canvas.
+// Track editor: initialized lazily on first open since it needs an
+// existing AudioContext (only created after the user gestures).
+let trackEditor: TrackEditor | null = null;
+
+function ensureTrackEditor(): TrackEditor | null {
+  if (trackEditor) return trackEditor;
+  if (!audioCtx) return null;
+  trackEditor = new TrackEditor({
+    audioCtx,
+    onSave: applyEditorSave,
+    onClose: handleEditorClose,
+  });
+  return trackEditor;
+}
+
+// Open the editor for a track. If it isn't currently the active track
+// (audioBuffer in memory), load it first via the standard play path so
+// we have its decoded buffer and analysis available. Pauses the game
+// for the duration of the editor.
+async function openEditorForTrack(hash: string): Promise<void> {
+  const track = tracks.find((t) => t.hash === hash);
+  if (!track || track.status !== "ready") return;
+  if (!audioCtx) audioCtx = new AudioContext();
+  const editor = ensureTrackEditor();
+  if (!editor) return;
+
+  if (hash !== activeTrackHash) {
+    // Hand control over to playTrack; it'll set this hash as active and
+    // populate audioBuffer + songAnalysis. Wait until that lands before
+    // opening the editor.
+    await playTrack(hash);
+    // playTrack returns immediately after kicking off the load; wait
+    // for the analysis to land.
+    await new Promise<void>((resolve) => {
+      const tick = () => {
+        if (
+          activeTrackHash === hash &&
+          audioBuffer &&
+          songAnalysis &&
+          songAnalysis.bpm > 0
+        ) {
+          resolve();
+          return;
+        }
+        setTimeout(tick, 100);
+      };
+      tick();
+    });
+  }
+
+  if (!audioBuffer || !songAnalysis) return;
+
+  // Force pause so the game stops advancing while the user edits. We
+  // don't restore the prior state on close — the user can resume on
+  // their own (Space) once they're done editing.
+  if (running && !dead && !paused) togglePause();
+  paused = true; // also catches the dead-during-rewind case
+  player.releasePointerLock();
+
+  editor.open({
+    hash,
+    name: track.name,
+    bpm: songAnalysis.bpm,
+    gridOffsetSec: songAnalysis.gridOffsetSec,
+    confidence: songAnalysis.confidence,
+    audioBuffer,
+  });
+}
+
+// Persist edits + apply to live state. Cache (localStorage) and IDB
+// metadata both get updated; if editing the active track we also patch
+// the in-memory songAnalysis so the next sync/respawn picks up the new
+// values immediately. When bpm or gridOffset changed materially, runs
+// a worker round-trip to recompute window features + sections at the
+// new beat grid (~1–3s on a multi-min track) — otherwise the cached
+// `windowFeatures` would silently misalign with the new offset.
+async function applyEditorSave(
+  hash: string,
+  patch: TrackEditPatch,
+): Promise<void> {
+  const cached = getCachedAnalysis(hash);
+  if (!cached) return;
+
+  const bpmChanged = Math.abs(cached.bpm - patch.bpm) > 1e-3;
+  const gridChanged = Math.abs(cached.gridOffsetSec - patch.gridOffsetSec) > 1e-3;
+
+  let updated: SongAnalysis = {
+    ...cached,
+    bpm: patch.bpm,
+    gridOffsetSec: patch.gridOffsetSec,
+  };
+
+  // Recompute sections only when the beat grid actually moved AND we
+  // have the audio in memory. Editor-open already auto-loads non-active
+  // tracks via playTrack, so audioBuffer should match the edited hash
+  // here. If for some reason it doesn't, we just persist the bpm/grid
+  // change without resectioning (sections will look slightly off until
+  // a full re-analyze).
+  if ((bpmChanged || gridChanged) && audioBuffer && hash === activeTrackHash) {
+    try {
+      const recomputed = await recomputeSections(
+        audioBuffer,
+        patch.bpm,
+        patch.gridOffsetSec,
+      );
+      updated = {
+        ...updated,
+        windowFeatures: recomputed.windowFeatures,
+        windowDurationSec: recomputed.windowDurationSec,
+        sections: recomputed.sections,
+      };
+      console.log(
+        `re-detected sections at bpm=${patch.bpm.toFixed(2)} ` +
+          `gridOffset=${patch.gridOffsetSec.toFixed(3)}: ` +
+          `${recomputed.sections.length} sections, ` +
+          `${new Set(recomputed.sections.map((s) => s.kind)).size} kinds`,
+      );
+    } catch (err) {
+      console.warn("section recompute failed; persisting bpm/grid only:", err);
+    }
+  }
+
+  setCachedAnalysis(hash, updated);
+
+  // Update the in-memory list row's bpm so the music tab shows the
+  // corrected value (durationSec unchanged).
+  const trackIdx = tracks.findIndex((t) => t.hash === hash);
+  if (trackIdx >= 0) {
+    tracks[trackIdx] = { ...tracks[trackIdx], bpm: patch.bpm };
+    renderTrackList();
+  }
+
+  // Update IDB TrackMeta for user tracks. We re-put with the existing
+  // bytes since putStoredTrack writes meta + bytes in one transaction.
+  const track = tracks[trackIdx];
+  if (track && track.origin === "user") {
+    try {
+      const bytes = await getTrackBytes(hash);
+      if (bytes) {
+        await putStoredTrack(
+          {
+            hash,
+            name: track.name,
+            durationSec: track.durationSec ?? 0,
+            bpm: patch.bpm,
+            addedAt: Date.now(),
+          },
+          bytes,
+        );
+      }
+    } catch (err) {
+      console.warn("track meta update failed:", err);
+    }
+  }
+
+  // If editing the active track, patch the live state too. The corridor
+  // isn't rebuilt automatically; user resumes (Space) and either lets
+  // it play with the corrected values, or LMB-syncs to lock alignment
+  // from the current moment.
+  if (hash === activeTrackHash) {
+    songAnalysis = updated;
+    currentGridOffsetSec = patch.gridOffsetSec;
+    currentForwardSpeed = forwardSpeedForBpm(patch.bpm);
+    songMaxLoudness = updated.sections.reduce(
+      (m, s) => Math.max(m, s.avgLoudness),
+      0,
+    );
+    recolorStraightsFromAnalysis();
+    waveform.setSongStructure(patch.bpm, patch.gridOffsetSec, updated.sections);
+  }
+}
+
+function handleEditorClose(): void {
+  // Game is left paused — user resumes via Space or canvas-click on
+  // their own. Avoids surprising auto-play right after they finish
+  // tweaking values.
+}
+
 async function playTrack(hash: string): Promise<void> {
   if (hash === activeTrackHash) return;
   const track = tracks.find((t) => t.hash === hash);
@@ -1282,7 +1474,7 @@ renderer.setAnimationLoop(() => {
     }
     ensureSectionsAhead(pathS);
     placeMarkersUpTo(pathS + SECTION_LOOKAHEAD);
-  } else if (running && dead) {
+  } else if (running && dead && !paused) {
     // Game-over: rewind controller drives pathS backward instead of
     // freezing it. Initial recoil eases toward a slow residual drift
     // (framerate-independent exponential ease, same shape as the player
@@ -1358,10 +1550,11 @@ renderer.setAnimationLoop(() => {
 window.addEventListener("keydown", (e) => {
   // Core gameplay keys — always available.
   if (e.code === "KeyR") respawn();
-  // Esc: close the user menu first if it's open; otherwise fall through
-  // to the gameplay quit-to-title.
+  // Esc: close the track editor first if open, then user menu, then
+  // fall through to gameplay quit-to-title.
   else if (e.code === "Escape") {
-    if (userMenuOpen()) toggleUserMenu();
+    if (trackEditor?.isOpen()) trackEditor.closeFromEsc();
+    else if (userMenuOpen()) toggleUserMenu();
     else quitToTitle();
   }
   // Dev-only: Space pause, B marker toggle, I invincibility.
@@ -1380,8 +1573,124 @@ window.addEventListener("keydown", (e) => {
 canvas.addEventListener("click", () => {
   if (!running && audioBuffer) startGame();
   else if (dead) respawn();
-  else player.requestPointerLockIfNeeded();
+  else syncFromCurrentMoment();
 });
+
+// Beat-grid resync: treat the current playback moment as beat 1.
+// Triggered by LMB during active gameplay — useful when the analyzer's
+// detected beat 1 is off and the user can hear where the real downbeat
+// lands. Audio keeps playing untouched; we change `currentGridOffsetSec`
+// to anchor the beat clock to the click moment, then tear down the
+// corridor and rebuild it from pathS=0 so straights/turns/gates align
+// with the new beat origin. Sections (palette/density) stay anchored in
+// absolute song-time — `audioSectionForPathS` already maps pathS →
+// songTime via the new offset, so they line up with the same musical
+// moments without re-detection.
+function syncFromCurrentMoment(): void {
+  if (!running || dead || paused) return;
+  if (!audioCtx || !audioSource) return;
+
+  flashSync();
+  currentGridOffsetSec = audioCtx.currentTime - audioStartTime;
+
+  // Tear down corridor. scene.remove unparents but doesn't dispose
+  // geometries/materials — for typical sync frequency this leaks a few
+  // MB per click (acceptable for the hackathon; address if it bites).
+  for (const obj of straightObjects) {
+    if (obj) scene.remove(obj.group);
+  }
+  straightObjects.length = 0;
+  sections.length = 0;
+  chart.length = 0;
+  prevEndSlot = null;
+  turnsBuilt = 0;
+  edgeMaterials.length = 0;
+
+  for (const m of markers) scene.remove(m);
+  markers.length = 0;
+  nextBeatIdx = 1;
+  nextBarIdx = 1;
+  nextPhraseIdx = 1;
+  nextPeriodIdx = 1;
+
+  pathS = 0;
+  player.reset();
+
+  ensureSectionsAhead(0);
+  placeMarkersUpTo(SECTION_LOOKAHEAD);
+
+  // Snap camera + prevWorldPos so collision doesn't see a phantom
+  // long-distance Z-crossing on the next frame.
+  const pose = samplePath(sections, 0);
+  camera.position.set(pose.pos.x, pose.pos.y, pose.pos.z);
+  camera.rotation.y = pose.yaw;
+  prevWorldPos.copy(camera.position);
+
+  // Re-render waveform's phrase-grid lines from the new offset.
+  if (songAnalysis) {
+    waveform.setSongStructure(
+      songAnalysis.bpm,
+      currentGridOffsetSec,
+      songAnalysis.sections,
+    );
+  }
+
+  // Kick off background section recompute so palette/density boundaries
+  // realign to the new beat grid (the existing sections are still
+  // content-correct via absolute song-time lookup, but their boundaries
+  // were placed at OLD-grid 16-beat marks). Non-blocking: corridor
+  // renders immediately with old sections; updated sections snap in
+  // ~1–3s once the worker round-trip lands and recolorStraightsFrom-
+  // Analysis updates already-built straights in place.
+  void recomputeSectionsAfterSync();
+}
+
+// Generation counter: bumps on every sync so a rapid second sync click
+// invalidates the in-flight recompute from the first.
+let syncRecomputeGen = 0;
+
+async function recomputeSectionsAfterSync(): Promise<void> {
+  if (!audioBuffer || !songAnalysis || !activeTrackHash) return;
+  const gen = ++syncRecomputeGen;
+  const hash = activeTrackHash;
+  const bpm = songAnalysis.bpm;
+  const gridOffset = currentGridOffsetSec;
+  try {
+    const recomputed = await recomputeSections(audioBuffer, bpm, gridOffset);
+    // Stale check: another sync (or track swap) superseded this run.
+    if (gen !== syncRecomputeGen) return;
+    if (hash !== activeTrackHash || !songAnalysis) return;
+    songAnalysis = {
+      ...songAnalysis,
+      windowFeatures: recomputed.windowFeatures,
+      windowDurationSec: recomputed.windowDurationSec,
+      sections: recomputed.sections,
+    };
+    songMaxLoudness = recomputed.sections.reduce(
+      (m, s) => Math.max(m, s.avgLoudness),
+      0,
+    );
+    recolorStraightsFromAnalysis();
+    waveform.setSongStructure(bpm, gridOffset, recomputed.sections);
+    console.log(
+      `sync section recompute: ${recomputed.sections.length} sections, ` +
+        `${new Set(recomputed.sections.map((s) => s.kind)).size} kinds`,
+    );
+  } catch (err) {
+    console.warn("sync section recompute failed:", err);
+  }
+}
+
+// Pulse the white-flash overlay. Removing-then-re-adding the class
+// (with a forced reflow between) restarts the CSS animation even if a
+// previous flash is still in flight from a rapid double-click.
+function flashSync(): void {
+  const flash = document.getElementById("sync-flash");
+  if (!flash) return;
+  flash.classList.remove("flashing");
+  void flash.offsetWidth;
+  flash.classList.add("flashing");
+}
 
 // RMB-on-death = continue from the previous turn (a partial-restart that
 // preserves song progress). preventDefault stops the contextmenu from

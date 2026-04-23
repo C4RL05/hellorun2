@@ -106,11 +106,24 @@ async function ensureReady(): Promise<void> {
   essentia = new Essentia(EssentiaWASM);
 }
 
-export interface AnalysisRequest {
-  readonly type: "analyze";
-  readonly channelData: Float32Array;
-  readonly sampleRate: number;
-}
+export type AnalysisRequest =
+  | {
+      readonly type: "analyze";
+      readonly channelData: Float32Array;
+      readonly sampleRate: number;
+    }
+  | {
+      // Re-run only the per-window feature extraction at a new
+      // gridOffset / bpm. Skips beat detection (RhythmExtractor /
+      // Percival) since the caller already has those — this is the
+      // editor-save path, where the user is correcting the beat grid
+      // and needs sections to realign without a full ~15s re-analyze.
+      readonly type: "compute-windows";
+      readonly channelData: Float32Array;
+      readonly sampleRate: number;
+      readonly bpm: number;
+      readonly gridOffsetSec: number;
+    };
 
 export interface WindowFeature {
   // Window's start time within the song (seconds from sample 0).
@@ -152,10 +165,34 @@ export type AnalysisResponse =
       readonly windowFeatures: readonly WindowFeature[];
       readonly windowDurationSec: number;
     }
+  | {
+      // Response to "compute-windows" — just the re-derived per-window
+      // features at the requested grid; main thread runs detectSections
+      // on top.
+      readonly type: "windows-result";
+      readonly windowFeatures: readonly WindowFeature[];
+      readonly windowDurationSec: number;
+    }
   | { readonly type: "error"; readonly message: string };
 
 self.onmessage = async (e: MessageEvent<AnalysisRequest>) => {
   try {
+    if (e.data.type === "compute-windows") {
+      await ensureReady();
+      const windowFeatures = computeWindowFeatures(
+        e.data.channelData,
+        e.data.sampleRate,
+        e.data.gridOffsetSec,
+        e.data.bpm,
+      );
+      const out: AnalysisResponse = {
+        type: "windows-result",
+        windowFeatures,
+        windowDurationSec: (16 * 60) / e.data.bpm,
+      };
+      self.postMessage(out);
+      return;
+    }
     if (e.data.type !== "analyze") return;
     postProgress("loading", 0.05);
     await ensureReady();

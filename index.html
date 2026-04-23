@@ -152,8 +152,186 @@
         border-color: rgba(0, 170, 255, 0.85);
         background: rgba(0, 170, 255, 0.08);
       }
+      .track-edit {
+        background: transparent;
+        color: rgba(0, 170, 255, 0.55);
+        border: 1px solid rgba(0, 170, 255, 0.3);
+        width: 1.5rem;
+        height: 1.5rem;
+        font: inherit;
+        font-size: 0.85rem;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0;
+        flex-shrink: 0;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+      }
+      .track-edit:hover {
+        color: rgba(0, 170, 255, 1);
+        border-color: rgba(0, 170, 255, 0.85);
+        background: rgba(0, 170, 255, 0.08);
+      }
+      /* Track editor modal — opens on top of the music tab when the
+         user clicks ✎ on a track row. Z-index above the menu (20) but
+         below sync-flash (100). */
+      #track-editor {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.65);
+        color: #00aaff;
+        font-family: "testpattern", ui-monospace, Menlo, Consolas, monospace;
+        text-transform: uppercase;
+        letter-spacing: 0;
+        z-index: 50;
+      }
+      #track-editor.hidden { display: none; }
+      .editor-modal {
+        display: flex;
+        flex-direction: column;
+        background: rgba(0, 0, 0, 0.92);
+        border: 1px dashed rgba(0, 170, 255, 0.55);
+        width: min(90vw, 60rem);
+        max-height: 90vh;
+      }
+      .editor-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 1rem;
+        padding: 1rem 1.5rem;
+        border-bottom: 1px dashed rgba(0, 170, 255, 0.35);
+      }
+      .editor-header h2 {
+        margin: 0;
+        font-weight: 300;
+        font-size: 0.95rem;
+        opacity: 0.9;
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .editor-close {
+        background: transparent;
+        color: #00aaff;
+        border: 1px solid rgba(0, 170, 255, 0.55);
+        width: 1.75rem;
+        height: 1.75rem;
+        font: inherit;
+        font-size: 1rem;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0;
+        flex-shrink: 0;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .editor-close:hover {
+        background: rgba(0, 170, 255, 0.12);
+        border-color: rgba(0, 170, 255, 1);
+      }
+      .editor-meta {
+        display: flex;
+        gap: 1.5rem;
+        padding: 0.75rem 1.5rem;
+        font-size: 0.75rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .editor-meta-field {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5rem;
+      }
+      .editor-meta-field .label {
+        opacity: 0.55;
+      }
+      .editor-meta-field input {
+        background: transparent;
+        color: #00aaff;
+        border: 1px solid rgba(0, 170, 255, 0.55);
+        font: inherit;
+        font-size: 0.85rem;
+        padding: 0.25rem 0.5rem;
+        width: 5rem;
+        text-align: right;
+        text-transform: none;
+      }
+      .editor-meta-field input:focus {
+        outline: none;
+        border-color: rgba(0, 170, 255, 1);
+      }
+      .editor-meta-field .value {
+        opacity: 0.85;
+      }
+      .editor-canvas-wrap {
+        padding: 1rem 1.5rem;
+        flex: 1;
+        min-height: 14rem;
+        display: flex;
+      }
+      #editor-waveform {
+        display: block;
+        width: 100%;
+        height: 14rem;
+        background: rgba(0, 30, 60, 0.4);
+        border: 1px solid rgba(0, 170, 255, 0.35);
+        cursor: crosshair;
+      }
+      .editor-help {
+        padding: 0 1.5rem 0.75rem;
+        font-size: 0.7rem;
+        opacity: 0.5;
+      }
+      .editor-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        padding: 1rem 1.5rem;
+        border-top: 1px dashed rgba(0, 170, 255, 0.35);
+      }
+      .editor-footer button {
+        background: transparent;
+        color: #00aaff;
+        border: 1px solid rgba(0, 170, 255, 0.55);
+        font: inherit;
+        font-size: 0.85rem;
+        padding: 0.5rem 1.25rem;
+        cursor: pointer;
+        text-transform: uppercase;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .editor-footer button:hover {
+        background: rgba(0, 170, 255, 0.12);
+        border-color: rgba(0, 170, 255, 1);
+      }
+      .editor-footer .save-btn {
+        background: rgba(0, 170, 255, 0.1);
+      }
       #title-screen.hidden {
         display: none;
+      }
+      /* Sync flash: full-viewport white overlay that pulses on
+         beat-resync (LMB during active play). The peak-and-decay hides
+         the snap-cut between the old and new corridor layouts.
+         pointer-events:none so it never intercepts clicks; high
+         z-index so it sits above menu and waveform. */
+      #sync-flash {
+        position: fixed;
+        inset: 0;
+        background: #fff;
+        pointer-events: none;
+        opacity: 0;
+        z-index: 100;
+      }
+      #sync-flash.flashing {
+        animation: sync-flash 300ms ease-out;
+      }
+      @keyframes sync-flash {
+        0% { opacity: 0.85; }
+        100% { opacity: 0; }
       }
       /* User menu — top-right hamburger toggle + tabbed modal. Sits
          above the user-menu modal (z-index 22 vs 20) so the hamburger
@@ -267,6 +445,49 @@
       <p class="subtitle">loading audio…</p>
     </div>
     <input type="file" id="file-picker" accept="audio/*" hidden />
+    <div id="sync-flash"></div>
+    <div id="track-editor" class="hidden">
+      <div class="editor-modal">
+        <header class="editor-header">
+          <h2 id="editor-name">track name</h2>
+          <button id="editor-close" type="button" aria-label="close">×</button>
+        </header>
+        <div class="editor-meta">
+          <div class="editor-meta-field">
+            <span class="label">bpm</span>
+            <input
+              id="editor-bpm"
+              type="number"
+              step="0.01"
+              min="40"
+              max="208"
+            />
+          </div>
+          <div class="editor-meta-field">
+            <span class="label">grid offset</span>
+            <span id="editor-grid-offset" class="value">0.000s</span>
+          </div>
+          <div class="editor-meta-field">
+            <span class="label">duration</span>
+            <span id="editor-duration" class="value">0:00</span>
+          </div>
+          <div class="editor-meta-field">
+            <span class="label">confidence</span>
+            <span id="editor-confidence" class="value">0.00</span>
+          </div>
+        </div>
+        <div class="editor-canvas-wrap">
+          <canvas id="editor-waveform"></canvas>
+        </div>
+        <p class="editor-help">
+          wheel: zoom · rmb-drag: pan · lmb-click: play from here · lmb-drag: shift beat grid
+        </p>
+        <footer class="editor-footer">
+          <button id="editor-cancel" type="button">cancel</button>
+          <button id="editor-save" class="save-btn" type="button">save</button>
+        </footer>
+      </div>
+    </div>
     <button id="menu-button" type="button" aria-label="menu">
       <span></span>
       <span></span>

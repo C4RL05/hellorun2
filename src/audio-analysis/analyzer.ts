@@ -141,6 +141,84 @@ export async function analyzeAudio(
   });
 }
 
+// Re-derive per-window features at a NEW gridOffset / bpm and run
+// section detection on top. Used by the track editor's save path when
+// the user has corrected bpm or gridOffset — the existing
+// windowFeatures were measured at the old grid and would silently
+// misalign with the new beat origin.
+//
+// Skips the heavy analyze pipeline (RhythmExtractor, Percival,
+// OnsetRate) — those outputs aren't affected by the user's edits and
+// re-running them would add ~10–15s for nothing. The compute-windows
+// worker path is roughly the duration of the per-window Essentia loop,
+// typically 1–3 seconds for a multi-minute track.
+export async function recomputeSections(
+  buffer: AudioBuffer,
+  bpm: number,
+  gridOffsetSec: number,
+): Promise<{
+  windowFeatures: readonly WindowFeature[];
+  windowDurationSec: number;
+  sections: Section[];
+}> {
+  const worker = new Worker(
+    new URL("./analyzer-worker.ts", import.meta.url),
+    { type: "module" },
+  );
+
+  const analysisBuffer =
+    buffer.sampleRate === ANALYSIS_SAMPLE_RATE
+      ? buffer
+      : await resampleBuffer(buffer, ANALYSIS_SAMPLE_RATE);
+  const mono = mixToMono(analysisBuffer);
+
+  const result = await new Promise<{
+    windowFeatures: readonly WindowFeature[];
+    windowDurationSec: number;
+  }>((resolve, reject) => {
+    worker.onmessage = (e: MessageEvent) => {
+      const msg = e.data as
+        | {
+            type: "windows-result";
+            windowFeatures: readonly WindowFeature[];
+            windowDurationSec: number;
+          }
+        | { type: "error"; message: string }
+        | { type: "progress"; stage: string; progress: number };
+      if (msg.type === "windows-result") {
+        worker.terminate();
+        resolve({
+          windowFeatures: msg.windowFeatures,
+          windowDurationSec: msg.windowDurationSec,
+        });
+      } else if (msg.type === "error") {
+        worker.terminate();
+        reject(new Error(msg.message));
+      }
+    };
+    worker.onerror = (e: ErrorEvent) => {
+      worker.terminate();
+      reject(new Error(e.message || "worker error"));
+    };
+    worker.postMessage(
+      {
+        type: "compute-windows",
+        channelData: mono,
+        sampleRate: analysisBuffer.sampleRate,
+        bpm,
+        gridOffsetSec,
+      },
+      [mono.buffer],
+    );
+  });
+
+  return {
+    windowFeatures: result.windowFeatures,
+    windowDurationSec: result.windowDurationSec,
+    sections: detectSections(result.windowFeatures, bpm),
+  };
+}
+
 // OfflineAudioContext-based resampling. Renders the buffer at the target
 // sample rate without loss of audio (beyond the inherent band-limiting of
 // sample-rate conversion, which is fine for rhythm analysis).
