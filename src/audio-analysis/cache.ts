@@ -6,7 +6,7 @@
 
 import type { SongAnalysis } from "./analyzer";
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const CACHE_PREFIX = `hr2-analysis-v${CACHE_VERSION}:`;
 // Match-anything prefix used by clearAnalysisCache so it also evicts
 // orphaned entries from previous CACHE_VERSION values.

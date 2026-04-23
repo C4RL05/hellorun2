@@ -12,7 +12,7 @@ Working through plan §7's 10-milestone sequence. See [`docs/milestone-status.md
 
 - **Milestones 1–7 complete**: cube-tunnel whitebox, forward motion, player input, gates + collision, 90° turn + second straight, audio-clock-driven pathS, procedural chart generation.
 - **Milestone 8 essentially done**: Essentia.js worker; BPM + grid-offset detection (with onset-bounded back-extrapolation); BPM-driven forward speed; drag-drop BYOM; per-16-beat window features (loudness/centroid/HPCP chroma); section detection (combined energy+chroma novelty → 16/32/64-beat blocks → first-fit clustering into "kinds"); persistent localStorage analysis cache.
-- **Milestone 9 partially done**: rolling corridor generation (section list, `ensureSectionsAhead`, alternating turns, streamed per-section charts with corner continuity). Section-driven palette shifts and density modulation are the remaining work — analysis side now provides everything needed.
+- **Milestone 9 essentially done**: rolling corridor generation (section list, `ensureSectionsAhead`, alternating turns, streamed per-section charts with corner continuity); per-straight density driven by audio-section avgLoudness (quiet→easy, loud→hard); per-straight tunnel edge color from `SECTION_EDGE_PALETTE` indexed by `Section.kind`; retroactive recolor when analysis lands so boot-time straights catch up.
 - **Milestone 10 not started**.
 
 Note on terminology: a "section" in this codebase has two unrelated meanings.
@@ -24,6 +24,7 @@ These never overlap conceptually. Don't conflate them.
 ## Read these before touching gameplay
 
 - [`docs/hellorun2-plan.md`](docs/hellorun2-plan.md) — design brief. Plan §2/§4/§5 define gameplay invariants that are not up for re-negotiation without user input.
+- [`docs/inspiration.md`](docs/inspiration.md) — design DNA: HelloRun (2013), Star Wars Arcade (1983) trench run, Super Hexagon. Read when a proposed feature feels like it might violate the spirit of the project.
 - [`docs/architecture.md`](docs/architecture.md) — how the code is organized: path model, state machine, input pipeline, chart system, audio pipeline, debug overlay.
 - [`docs/dev-tools.md`](docs/dev-tools.md) — npm scripts, Playwright tools, URL query params, dev-hook `window.__*` inventory.
 - [`docs/gotchas.md`](docs/gotchas.md) — non-obvious pitfalls encountered during development. **Read this before debugging WebGL/audio/Playwright issues** — many common failure modes are documented there with fixes.

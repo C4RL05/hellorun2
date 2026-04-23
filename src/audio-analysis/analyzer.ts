@@ -252,7 +252,12 @@ export function detectSections(
 // Distance combines normalized energy/timbre L2 with chroma cosine —
 // loudness/centroid catches "drop vs verse with same chords"; chroma
 // catches "verse vs chorus with same energy."
-const CLUSTER_THRESHOLD = 0.4;
+// Lower → more distinct kinds (more palette variety, tighter clusters).
+// 0.30 surfaces 4–5 kinds on typical pop/EDM (verse/pre/chorus/bridge).
+// At 0.40 the dev song collapsed to just 2 (loud-mix vs quiet-breakdown),
+// which left only one palette shift per song. Bumping CACHE_VERSION in
+// cache.ts when you change this forces re-clustering on reload.
+const CLUSTER_THRESHOLD = 0.30;
 function clusterSections(
   sections: ReadonlyArray<Omit<Section, "kind">>,
 ): number[] {

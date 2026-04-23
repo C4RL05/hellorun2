@@ -5,12 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HelloRun 2</title>
     <style>
-      /* Bundled under SIL Open Font License 1.1 — see public/fonts/OFL.txt.
-         "undefined medium" by Andi Rueckel (https://undefined-medium.com). */
       @font-face {
-        font-family: "undefined medium";
-        src: url("/fonts/undefined-medium.woff2") format("woff2"),
-             url("/fonts/undefined-medium.woff") format("woff");
+        font-family: "testpattern";
+        src: url("/fonts/testpattern.woff2") format("woff2"),
+             url("/fonts/testpattern.woff") format("woff");
         font-weight: normal;
         font-style: normal;
         font-display: block;
@@ -34,9 +32,9 @@
         align-items: center;
         background: rgba(0, 0, 0, 0.55);
         color: #00aaff;
-        font-family: "undefined medium", ui-monospace, Menlo, Consolas, monospace;
+        font-family: "testpattern", ui-monospace, Menlo, Consolas, monospace;
         text-transform: uppercase;
-        letter-spacing: 0.2em;
+        letter-spacing: 0;
         z-index: 10;
         cursor: pointer;
         user-select: none;
@@ -45,9 +43,6 @@
         margin: 0;
         font-weight: 300;
         font-size: clamp(2rem, 6vw, 4.5rem);
-        /* letter-spacing applies to trailing chars too, nudging the line
-           off-center; a matching text-indent compensates. */
-        text-indent: 0.2em;
       }
       #title-screen .subtitle {
         margin-top: 1.5rem;
@@ -84,9 +79,9 @@
         justify-content: center;
         background: rgba(0, 0, 0, 0.55);
         color: #00aaff;
-        font-family: "undefined medium", ui-monospace, Menlo, Consolas, monospace;
+        font-family: "testpattern", ui-monospace, Menlo, Consolas, monospace;
         text-transform: uppercase;
-        letter-spacing: 0.2em;
+        letter-spacing: 0;
         z-index: 20;
       }
       #dev-menu.hidden { display: none; }

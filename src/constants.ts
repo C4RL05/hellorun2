@@ -63,6 +63,20 @@ export const COLOR_BACKGROUND = 0x000000;
 export const COLOR_FACE = 0x0a1420;
 export const COLOR_EDGE = 0x00aaff;
 
+// Per-section edge palette. Each unique audio Section.kind gets a hue from
+// this list (kind 0 = first entry). Songs with more kinds than colors cycle
+// via modulo. Closed-barrier red (COLOR_BARRIER_EDGE) is fixed by plan §5
+// and intentionally absent here so danger never collides with section hue.
+// Kept in the cyan/magenta/amber family to stay on the Tron-Recognizer
+// aesthetic; faces stay COLOR_FACE across all kinds.
+export const SECTION_EDGE_PALETTE: readonly number[] = [
+  0x00aaff, // cyan — same as COLOR_EDGE so kind 0 keeps the default look
+  0xff66cc, // pink
+  0xffaa22, // amber
+  0x44ddaa, // teal-green
+  0x9966ff, // violet
+];
+
 // Per-cube random rotation range, applied independently on X/Y/Z. Gives the
 // tunnel a subtle hand-built jitter instead of a perfectly regular grid.
 export const CUBE_JITTER_DEG = 10;

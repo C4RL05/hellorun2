@@ -8,4 +8,4 @@ When milestone 8 lands (drag-drop BYOM), this folder becomes optional — everyo
 
 ## Fonts
 
-`fonts/undefined-medium.woff2` and `.woff` — "**undefined medium**" by [Andi Rueckel](https://undefined-medium.com) ([github.com/andirueckel/undefined-medium](https://github.com/andirueckel/undefined-medium)), bundled under the [SIL Open Font License 1.1](fonts/OFL.txt). The font is distinct from this project's MIT-style source license; it remains OFL in perpetuity. Do not rename if modifying — "undefined medium" is a Reserved Font Name.
+`fonts/testpattern.woff2` and `.woff` — bespoke pixel font drawn by Carlos in Photoshop, converted to TTF via [YAL Pixel Font Converter](https://yal.cc/r/20/pixelfont/), then to web formats via [FontSquirrel's webfont generator](https://www.fontsquirrel.com/tools/webfont-generator). No third-party license obligations.

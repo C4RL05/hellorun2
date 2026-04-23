@@ -96,7 +96,7 @@ Plan: BPM + beat grid + section detection. Drop-in audio files.
 
 **Files**: `src/audio-analysis/{analyzer,analyzer-worker,cache}.ts`, `src/main.ts` (loadAndAnalyzeSource flow), `src/waveform.ts` (visualization), `tools/analysis-check.mjs` (debugging).
 
-## 🟡 M9 — Chart generation from audio (partially started)
+## ✅ M9 — Chart generation from audio (essentially done)
 
 Plan: sections drive difficulty, beats drive gate placement, section boundaries drive palette shifts.
 
@@ -104,12 +104,13 @@ Plan: sections drive difficulty, beats drive gate placement, section boundaries 
 - ✅ **Rolling corridor generation**: `src/corridor.ts` exports `Section` (straight or turn) and `samplePath(sections, s)`; `main.ts` maintains a growing `sections[]` with `ensureSectionsAhead(pathS)` appending straight→turn→straight→turn on demand. Turn direction alternates right/left so the corridor zig-zags. Chart generator is streamed per-corridor-straight via `generateChart(GATE_COUNT, { prevEndSlot })`, preserving corner continuity.
 - ✅ **Section data ready** (M8): `analysis.sections[]` provides the per-block `kind`, `avgLoudness`, `avgCentroid`, `avgChroma`. Everything needed to drive density and palette is now exposed.
 
-**Still pending — this is the next session's work**:
-- ❌ **Section→chart density**: read `section.avgLoudness` for the audio block covering each corridor straight, map to `maxDifficulty` (1–4) on the per-section `generateChart(...)` call. Quiet sections → easy; loud sections → hard. Easy lift in `appendSection`.
-- ❌ **Palette shifts on `kind` changes**: tunnel edge color cycles through a palette indexed by `section.kind`. Each new audio-section kind = new corridor color. Closed-barrier red is fixed (plan §5 invariant — don't change).
-- ❌ **Optional refinements**: should `detectSections` also coalesce consecutive same-kind sections into a `musicalSections[]` (the user asked about this and we deferred). Useful if downstream wants "one entry per musical section" rather than fixed-length blocks.
+**Done (this session)**:
+- ✅ **Section→chart density**: `appendSection` looks up the audio section covering each corridor straight via `audioSectionForPathS(pathStart)` and maps `section.avgLoudness / songMaxLoudness` to `maxDifficulty` quartiles (1–4). Falls back to `maxDifficulty=4` when `songAnalysis` is null (boot before analysis lands; analysis failed).
+- ✅ **Palette shifts on `kind` changes**: `SECTION_EDGE_PALETTE` (cyan/pink/amber/teal/violet) in `constants.ts`; each straight's tunnel `LineMaterial.color` is set from `palette[section.kind % palette.length]` at build time. Barrier edge color (`COLOR_BARRIER_EDGE`) untouched. `recolorStraightsFromAnalysis()` runs when analysis lands so the boot-built straights pick up the right color.
+- ✅ **CLUSTER_THRESHOLD lowered to 0.30** (CACHE_VERSION bumped 1→2). Dev song still resolves to 2 kinds — its breakdown vs main-mix gap is too clean to split further; typical pop/EDM should now surface 4–5.
 
-Prerequisites are now satisfied — go straight to wiring.
+**Deferred (still optional)**:
+- ❌ `detectSections` could emit a `musicalSections[]` that coalesces consecutive same-kind sections. Not needed: callers key on `kind`, so contiguous same-kind sections naturally produce no palette shift / density step. Worth revisiting only if a future feature needs "one entry per chord-stable region."
 
 ## ⏳ M10 — Polish (not started)
 

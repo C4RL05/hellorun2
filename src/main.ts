@@ -14,6 +14,7 @@ import {
   CAMERA_NEAR,
   CELL,
   COLOR_BACKGROUND,
+  COLOR_EDGE,
   FIRST_GATE_Z,
   FORWARD_SPEED,
   GATE_COUNT,
@@ -28,6 +29,7 @@ import {
   MARKER_PERIOD_SIZE,
   PERIOD_LENGTH,
   PHRASE_LENGTH,
+  SECTION_EDGE_PALETTE,
   TURN_ARC_LENGTH,
   TURN_RADIUS,
   forwardSpeedForBpm,
@@ -40,7 +42,10 @@ import {
 } from "./corridor";
 import type { Section } from "./corridor";
 import { analyzeAudio } from "./audio-analysis/analyzer";
-import type { SongAnalysis } from "./audio-analysis/analyzer";
+import type {
+  Section as AudioSection,
+  SongAnalysis,
+} from "./audio-analysis/analyzer";
 import {
   clearAnalysisCache,
   getCachedAnalysis,
@@ -93,6 +98,12 @@ interface StraightObj {
   readonly openSlots: readonly number[];
   readonly barriers: readonly BarrierInfo[];
   readonly cubeTransforms: readonly THREE.Matrix4[];
+  // Tunnel-edge LineMaterial only — barrier edges (gates.edgeMaterial)
+  // stay the fixed danger color (plan §5). Held separately so palette
+  // shifts on section-kind changes can recolor the tunnel without
+  // touching barrier color, and so retroactive recoloring after analysis
+  // lands knows which material to mutate.
+  readonly tunnelEdgeMaterial: LineMaterial;
 }
 
 const sections: Section[] = [];
@@ -130,8 +141,10 @@ const CUBE_EDGES = new THREE.EdgesGeometry(
 function buildStraightObj(
   openSlots: readonly number[],
   name: string,
+  edgeColor: number,
 ): StraightObj {
   const tunnel = createTunnel();
+  tunnel.edgeMaterial.color.setHex(edgeColor);
   const gates = createGates(openSlots);
   edgeMaterials.push(tunnel.edgeMaterial, gates.edgeMaterial);
   const group = new THREE.Group();
@@ -144,7 +157,44 @@ function buildStraightObj(
     openSlots,
     barriers: gates.barriers,
     cubeTransforms: tunnel.cubeTransforms,
+    tunnelEdgeMaterial: tunnel.edgeMaterial,
   };
+}
+
+// Maps a corridor pathS to the audio Section that covers the same moment
+// of the song. pathS=0 corresponds to beat 1 (gridOffsetSec into the
+// audio file), so songTime = pathS / forwardSpeed + gridOffsetSec. Returns
+// null when no analysis has landed yet, or the last section when pathS
+// runs past song-end (long corridor / late seek). Same-kind contiguous
+// sections naturally collapse downstream because callers key on
+// `Section.kind`, so we don't need a separate musicalSections[] coalescer.
+function audioSectionForPathS(s: number): AudioSection | null {
+  if (!songAnalysis) return null;
+  const songTime = s / currentForwardSpeed + currentGridOffsetSec;
+  const secPerBeat = 60 / songAnalysis.bpm;
+  const secs = songAnalysis.sections;
+  for (const sec of secs) {
+    const endSec = sec.startSec + sec.beatLength * secPerBeat;
+    if (songTime < endSec) {
+      return songTime >= sec.startSec ? sec : null;
+    }
+  }
+  return secs.length > 0 ? secs[secs.length - 1] : null;
+}
+
+// Loudness → maxDifficulty bucket. Quiet sections (breakdowns, intros)
+// get easy phrases; loudest sections unlock the bouncy D=4 stuff. Linear
+// quartiles relative to the song's own peak loudness — keeps difficulty
+// distribution stable across songs with different absolute loudness.
+function maxDifficultyForSection(audioSection: AudioSection | null): number {
+  if (!audioSection || songMaxLoudness <= 0) return 4;
+  const t = audioSection.avgLoudness / songMaxLoudness;
+  return Math.min(4, Math.max(1, 1 + Math.floor(t * 4)));
+}
+
+function edgeColorForSection(audioSection: AudioSection | null): number {
+  if (!audioSection) return COLOR_EDGE;
+  return SECTION_EDGE_PALETTE[audioSection.kind % SECTION_EDGE_PALETTE.length];
 }
 
 // Mounts a section into the scene and keeps `sections` / `straightObjects`
@@ -156,20 +206,43 @@ function appendSection(section: Section): void {
     straightObjects.push(null);
     return;
   }
+  const audioSec = audioSectionForPathS(section.pathStart);
   const openSlots = generateChart(GATE_COUNT, {
     rand: chartRand,
     prevEndSlot: prevEndSlot ?? undefined,
+    maxDifficulty: maxDifficultyForSection(audioSec),
   });
   prevEndSlot = openSlots[openSlots.length - 1];
   chart.push(...openSlots);
   const idx = straightObjects.length;
-  const obj = buildStraightObj(openSlots, `straight-${idx}`);
+  const obj = buildStraightObj(
+    openSlots,
+    `straight-${idx}`,
+    edgeColorForSection(audioSec),
+  );
   obj.group.position.copy(section.position);
   obj.group.rotation.y = section.yaw;
   scene.add(obj.group);
   obj.group.updateMatrixWorld(true);
   straightObjects.push(obj);
   if (debugView) registerStraightDebugHelpers(obj);
+}
+
+// Walk every already-built straight and re-set its tunnel edge color from
+// the now-available analysis. The first 1–2 straights get built before
+// analysis lands (boot lookahead), so without this they'd stay the
+// default cyan even if their audio section is a different kind. Density
+// is NOT recomputed retroactively — gates are baked geometry and the
+// player will be at pathS=0 anyway, so default difficulty=4 on those
+// initial straights is acceptable.
+function recolorStraightsFromAnalysis(): void {
+  for (let i = 0; i < straightObjects.length; i++) {
+    const obj = straightObjects[i];
+    const sec = sections[i];
+    if (!obj || !sec || sec.kind !== "straight") continue;
+    const audioSec = audioSectionForPathS(sec.pathStart);
+    obj.tunnelEdgeMaterial.color.setHex(edgeColorForSection(audioSec));
+  }
 }
 
 function registerStraightDebugHelpers(obj: StraightObj): void {
@@ -316,6 +389,20 @@ const player = new PlayerController(canvas);
 // every time a new section is generated and weren't worth the complexity.
 const debugView = new DebugView(scene, canvas, [], { enabled: devMode });
 
+// Audio-derived state must be declared before the first ensureSectionsAhead
+// call below, because appendSection's audioSectionForPathS lookup reads
+// these in the boot path. Until analysis lands, audioSectionForPathS
+// returns null and the helpers fall back to default difficulty + cyan
+// edges — same visual as before any analysis-driven theming.
+let currentGridOffsetSec = devSong.gridOffsetSec;
+let currentForwardSpeed = FORWARD_SPEED;
+let songAnalysis: SongAnalysis | null = null;
+// Cached max avgLoudness across the song's sections. Used as the
+// denominator when bucketing per-section loudness into chart difficulty,
+// so the difficulty scale is per-song rather than absolute. 0 until the
+// first analysis lands.
+let songMaxLoudness = 0;
+
 // Seed the corridor with enough sections to cover the lookahead before the
 // first frame renders. ensureSectionsAhead appends straights/turns until
 // there's headroom past the given pathS.
@@ -323,7 +410,7 @@ ensureSectionsAhead(0);
 placeMarkersUpTo(SECTION_LOOKAHEAD);
 syncResolution();
 
-const waveform = new WaveformOverlay({ onSeek: seekToSongTime });
+const waveform = new WaveformOverlay({ onSeek: seekToWaveformClick });
 
 let dead = false;
 let pathS = 0;
@@ -355,15 +442,9 @@ let audioSource: AudioBufferSourceNode | null = null;
 // Subtracting this (and gridOffsetSec) from audioCtx.currentTime gives
 // "audio time since beat 1" — the master clock for pathS.
 let audioStartTime = 0;
-// Filled by the analyzer worker after decode. gridOffsetSec aligns the
-// audio-clock math so pathS=0 coincides with beat 1 of the song.
-// currentForwardSpeed is derived from detected BPM so gates land on beats
-// at any tempo (plan §8 feel-spec: constants define 120-BPM defaults,
-// runtime values scale per song). beats[] is exposed via songAnalysis
-// for M9 wiring.
-let currentGridOffsetSec = devSong.gridOffsetSec;
-let currentForwardSpeed = FORWARD_SPEED;
-let songAnalysis: SongAnalysis | null = null;
+// currentGridOffsetSec / currentForwardSpeed / songAnalysis / songMaxLoudness
+// are declared earlier (above ensureSectionsAhead's boot call) — see the
+// "Audio-derived state must be declared before…" comment.
 
 const titleOverlay = document.getElementById("title-screen");
 const titleSubtitle = titleOverlay?.querySelector(".subtitle") as
@@ -451,6 +532,11 @@ async function loadAndAnalyzeSource(
     songAnalysis = result;
     currentGridOffsetSec = result.gridOffsetSec;
     currentForwardSpeed = forwardSpeedForBpm(result.bpm);
+    songMaxLoudness = result.sections.reduce(
+      (m, s) => Math.max(m, s.avgLoudness),
+      0,
+    );
+    recolorStraightsFromAnalysis();
     waveform.setSongStructure(result.bpm, result.gridOffsetSec, result.sections);
     console.log(
       `analyzed ${label}: bpm=${result.bpm.toFixed(2)}, ` +
@@ -570,6 +656,13 @@ const devMenu = document.getElementById("dev-menu");
 function toggleDevMenu(): void {
   devMenu?.classList.toggle("hidden");
 }
+// Backdrop click closes the menu. The full-viewport #dev-menu wraps a
+// centered .dev-modal child; e.target === devMenu means the click landed
+// on the dimmed backdrop (clicks inside the modal bubble up with target
+// set to a child element).
+devMenu?.addEventListener("click", (e) => {
+  if (e.target === devMenu) toggleDevMenu();
+});
 document.getElementById("dev-clear-cache")?.addEventListener("click", () => {
   const removed = clearAnalysisCache();
   console.log(`cleared ${removed} cached analysis entr${removed === 1 ? "y" : "ies"}`);
@@ -725,6 +818,60 @@ const respawn = () => {
   titleOverlay?.classList.add("hidden");
 };
 
+// Walks the built section list backwards from `targetPathS` looking for
+// the most recent turn at or before it. Returns null when no prior turn
+// exists (player still in the first straight). Caller should
+// ensureSectionsAhead(targetPathS) before invoking, in case the target
+// lies past the currently-built corridor.
+function previousTurnPathStart(targetPathS: number): number | null {
+  for (let i = sections.length - 1; i >= 0; i--) {
+    const sec = sections[i];
+    if (sec.kind === "turn" && sec.pathStart <= targetPathS) {
+      return sec.pathStart;
+    }
+  }
+  return null;
+}
+
+// On-death "continue" shortcut (RMB while dead). Jumps back to the start
+// of the most recent turn — the corner immediately before the straight
+// the player died in — so the brief turn arc gives a couple beats of
+// lead-in before gates resume. Falls back to a full respawn if the player
+// died in the very first straight (no prior turn yet built).
+const continueFromPreviousTurn = () => {
+  if (!dead) return;
+  const turnPathStart = previousTurnPathStart(pathS);
+  if (turnPathStart === null) {
+    respawn();
+    return;
+  }
+  const songTime = turnPathStart / currentForwardSpeed + currentGridOffsetSec;
+  seekToSongTime(songTime);
+};
+
+// Waveform click handler. Snaps the seek target back to the start of the
+// turn immediately before the clicked time, so the player gets the turn
+// arc as a lead-in instead of being thrown straight into gates with no
+// reaction window. Mirrors the RMB-on-death continue behavior; both want
+// "land at a corner, fly the arc, then meet gates."
+function seekToWaveformClick(songTimeSec: number): void {
+  const targetPathS = Math.max(
+    0,
+    (songTimeSec - currentGridOffsetSec) * currentForwardSpeed,
+  );
+  // Grow the corridor up to (and a lookahead past) the click target so a
+  // turn at-or-before targetPathS is actually built and findable.
+  ensureSectionsAhead(targetPathS);
+  const turnPathStart = previousTurnPathStart(targetPathS);
+  if (turnPathStart === null) {
+    seekToSongTime(songTimeSec);
+    return;
+  }
+  const turnSongTime =
+    turnPathStart / currentForwardSpeed + currentGridOffsetSec;
+  seekToSongTime(turnSongTime);
+}
+
 // Quit back to the title screen: stop the song and put game state in the
 // same shape as initial page load. Next click resumes the start-flow.
 const quitToTitle = () => {
@@ -822,6 +969,17 @@ canvas.addEventListener("click", () => {
   if (!running && audioBuffer) startGame();
   else if (dead) respawn();
   else player.requestPointerLockIfNeeded();
+});
+
+// RMB-on-death = continue from the previous turn (a partial-restart that
+// preserves song progress). preventDefault stops the contextmenu from
+// flashing on the brief mousedown→up window. mousedown rather than click
+// because a right-click never fires the `click` event in browsers.
+canvas.addEventListener("mousedown", (e) => {
+  if (e.button === 2 && dead) {
+    e.preventDefault();
+    continueFromPreviousTurn();
+  }
 });
 
 // Suppress the browser's right-click context menu globally — RMB is a
