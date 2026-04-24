@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { BEATS_PER_STRAIGHT, TUNNEL_DEPTH, CELL } from "../../constants";
 import { mulberry32 } from "../../chart";
 import type {
@@ -17,7 +16,9 @@ import {
 
 // Cat's-eye delineators: small emissive markers (cubes, tetras, or
 // capsules) placed along the corridor in one of 9 layouts. Purely
-// visual. Geometry is merged so one type = one draw call per straight.
+// visual. One InstancedMesh per set — one draw call; per-instance
+// transforms stored in the instance matrix buffer so adding
+// per-instance pulse colors later is a one-liner (setColorAt).
 
 type Shape = "cube" | "tetra" | "capsule";
 type Layout =
@@ -164,7 +165,11 @@ export const cateye: DelineatorType<CateyeParams> = {
     const countAlongZ = BEATS_PER_STRAIGHT * params.density;
     const baseSize = BASE_SIZE * params.sizeScale;
 
-    const proto = baseShapeGeometry(params.shape, baseSize);
+    // Bake the shared rotation into the prototype geometry so the
+    // instance matrix can stay a pure translation. Cateye rotation is
+    // uniform across all instances in a set; a per-instance version
+    // of this type could put rotation back in the instance matrix.
+    const geometry = baseShapeGeometry(params.shape, baseSize);
     const rotMatrix = new THREE.Matrix4().makeRotationFromEuler(
       new THREE.Euler(
         params.rotation[0],
@@ -172,25 +177,22 @@ export const cateye: DelineatorType<CateyeParams> = {
         params.rotation[2],
       ),
     );
-    proto.applyMatrix4(rotMatrix);
+    geometry.applyMatrix4(rotMatrix);
 
     const placements = placementsForLayout(params.layout, countAlongZ);
-    const pieces: THREE.BufferGeometry[] = [];
-    const placementMatrix = new THREE.Matrix4();
-    for (const p of placements) {
-      placementMatrix.makeTranslation(p.x, p.y, p.z);
-      pieces.push(proto.clone().applyMatrix4(placementMatrix));
-    }
-    proto.dispose();
-
-    const merged = mergeGeometries(pieces, false);
-    for (const g of pieces) g.dispose();
-    if (!merged) throw new Error("cateye: merge failed");
 
     const material = new THREE.MeshBasicMaterial({ color: colorHex });
     material.color.multiplyScalar(DELINEATOR_BASE_STRENGTH);
 
-    const mesh = new THREE.Mesh(merged, material);
+    const mesh = new THREE.InstancedMesh(geometry, material, placements.length);
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < placements.length; i++) {
+      const p = placements[i] as Placement;
+      m.makeTranslation(p.x, p.y, p.z);
+      mesh.setMatrixAt(i, m);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+
     return {
       object: mesh,
       material,
