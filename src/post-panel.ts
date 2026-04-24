@@ -89,6 +89,30 @@ export function mountPostPanel(
     return wrap;
   };
 
+  // vec3 channels are space-constrained — three inputs sharing one row
+  // don't have room for chevron steppers, so use a bare input inside the
+  // same .post-number wrapper (keeps the border + focus-within styling).
+  const rawNumberInput = (
+    get: () => number,
+    set: (v: number) => void,
+    step: number,
+  ): HTMLDivElement => {
+    const wrap = document.createElement("div");
+    wrap.className = "post-number";
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = String(step);
+    input.value = String(get());
+    input.addEventListener("input", () => {
+      const v = parseFloat(input.value);
+      if (!Number.isFinite(v)) return;
+      set(v);
+      update();
+    });
+    wrap.append(input);
+    return wrap;
+  };
+
   const numberRow = (
     label: string,
     get: () => number,
@@ -152,9 +176,7 @@ export function mountPostPanel(
         next[i] = v;
         set(next);
       };
-      triplet.append(
-        numberStepper(channelGet, channelSet, undefined, undefined, step),
-      );
+      triplet.append(rawNumberInput(channelGet, channelSet, step));
     }
     row.append(triplet);
     return row;

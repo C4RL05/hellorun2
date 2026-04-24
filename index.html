@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HelloRun 2</title>
+    <link rel="icon" type="image/svg+xml" href="/images/2.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="preload" as="image" href="/images/hellorun2.svg" />
@@ -428,8 +429,8 @@
         display: flex;
         background: rgba(0, 0, 0, 0.85);
         border: 1px dashed rgba(255, 255, 255, 0.55);
-        min-width: 32rem;
-        min-height: 18rem;
+        width: min(36rem, 90vmin);
+        aspect-ratio: 1;
       }
       .user-tabs {
         display: flex;
@@ -458,9 +459,15 @@
       }
       .user-panes {
         flex: 1;
+        min-width: 0;
+        min-height: 0;
         padding: 1.5rem 2rem;
+        overflow: hidden;
       }
-      .user-pane { display: none; }
+      .user-pane {
+        display: none;
+        height: 100%;
+      }
       .user-pane.active { display: block; }
       /* Direct-child only — nested controls (like .track-delete inside
          a list row) need their own sizing and shouldn't inherit the
@@ -483,20 +490,25 @@
         background: rgba(255, 255, 255, 0.12);
         border-color: rgba(255, 255, 255, 1);
       }
-      /* Checkbox-style toggle button. `[ ]` / `[x]` prefix reflects
-         the aria-pressed state; JS just flips that attribute. */
-      .toggle-btn::before {
-        content: "[ ]  ";
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        opacity: 0.55;
+      /* Square checkbox-style toggle. Empty when aria-pressed=false,
+         filled when true. justify-self: start keeps it from stretching
+         to fill the grid cell. */
+      .settings-toggle {
+        justify-self: start;
+        width: 1rem;
+        height: 1rem;
+        padding: 0;
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
       }
-      .toggle-btn[aria-pressed="true"] {
-        background: rgba(255, 255, 255, 0.08);
+      .settings-toggle:hover {
         border-color: rgba(255, 255, 255, 0.85);
       }
-      .toggle-btn[aria-pressed="true"]::before {
-        content: "[x]  ";
-        opacity: 1;
+      .settings-toggle[aria-pressed="true"] {
+        background: rgba(255, 255, 255, 0.85);
+        border-color: rgba(255, 255, 255, 0.85);
       }
       /* Post panel: dense list of numeric rows + a small button row at
          the bottom. Scrolls within the pane when the full list
@@ -505,7 +517,7 @@
         display: flex;
         flex-direction: column;
         gap: 0.25rem;
-        max-height: 70vh;
+        max-height: 100%;
         overflow-y: auto;
         /* stable scrollbar gutter so content doesn't shift by ~10px
            when the scrollbar appears/disappears on tall content. */
@@ -531,12 +543,15 @@
       .post-section-header:first-child { margin-top: 0; }
       .post-row {
         display: grid;
-        grid-template-columns: 11rem 1fr;
+        grid-template-columns: 11rem minmax(0, 1fr);
         align-items: center;
         gap: 0.75rem;
       }
       .post-row label {
         opacity: 0.7;
+      }
+      .post-row label::first-letter {
+        text-transform: uppercase;
       }
       .post-row select {
         background: #0a0a0a;
@@ -595,6 +610,9 @@
         margin: 0;
       }
       .post-step {
+        display: flex;
+        align-items: center;
+        justify-content: center;
         background: transparent;
         color: #ffffff;
         border: 0;
@@ -606,17 +624,24 @@
         opacity: 0.45;
         transition: opacity 0.12s;
         user-select: none;
+        transform: translateY(-2px);
       }
-      /* Tighten the gap between adjacent < and > — they read as a pair,
-         so the inner edges get minimal padding while the outer edges
-         keep breathing room from the input. */
-      .post-step:has(+ .post-step) { padding-right: 0.1rem; }
-      .post-step + .post-step { padding-left: 0.1rem; }
+      /* `<` (the .post-step that has another .post-step after it) gets a
+         margin-right so it sits visibly apart from `>` instead of bumping
+         straight into it. `>` keeps the outer edge tight against the box. */
+      .post-step:has(+ .post-step) {
+        padding-right: 0.1rem;
+        margin-right: 0.2rem;
+      }
+      .post-step + .post-step {
+        padding-left: 0.1rem;
+        margin-right: 0.2rem;
+      }
       .post-step:hover { opacity: 1; }
       .post-step:active { opacity: 0.7; }
       .post-vec3 {
         display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0.4rem;
       }
       .post-buttons {
@@ -640,12 +665,6 @@
       .post-buttons button:hover {
         background: rgba(255, 255, 255, 0.12);
         border-color: rgba(255, 255, 255, 1);
-      }
-      /* Post pane needs more breathing room than the default tabs — the
-         dense grid of numeric rows pushes against the modal's min
-         width. */
-      .user-modal:has(.user-pane[data-pane="post"].active) {
-        min-width: 34rem;
       }
     </style>
   </head>
@@ -715,14 +734,18 @@
         </nav>
         <div class="user-panes">
           <section class="user-pane active" data-pane="settings">
-            <button
-              id="toggle-invincible"
-              type="button"
-              class="toggle-btn"
-              aria-pressed="false"
-            >
-              invincibility
-            </button>
+            <div class="post-panel">
+              <div class="post-section-header">accessibility</div>
+              <div class="post-row">
+                <label for="toggle-invincible">invincibility</label>
+                <button
+                  id="toggle-invincible"
+                  type="button"
+                  class="settings-toggle"
+                  aria-pressed="false"
+                ></button>
+              </div>
+            </div>
           </section>
           <section class="user-pane" data-pane="music">
             <ul id="track-list" class="track-list">
