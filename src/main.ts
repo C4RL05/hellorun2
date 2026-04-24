@@ -35,11 +35,11 @@ import {
   PHRASE_LENGTH,
   SAME_KIND_DIFFICULTY_BUMP_EVERY,
   SAME_KIND_TIER_BUMP_EVERY,
-  SECTION_EDGE_PALETTE,
   TURN_ARC_LENGTH,
   TURN_RADIUS,
   forwardSpeedForBpm,
 } from "./constants";
+import { colorForKind } from "./section-palette";
 import type { DensityTier } from "./constants";
 import {
   STRAIGHT_LENGTH,
@@ -193,10 +193,19 @@ interface StraightObj {
   // touching barrier color, and so retroactive recoloring after analysis
   // lands knows which material to mutate.
   readonly tunnelEdgeMaterial: LineMaterial;
+  // Prebuilt `[delineator]` log line fired by the RAF entry detector
+  // on first crossing. Baked at construction since the spec is final
+  // once analysis has landed (corridor build is deferred until then).
+  readonly delineatorLog: string;
 }
 
 const sections: Section[] = [];
 const straightObjects: (StraightObj | null)[] = [];
+// Tracks the straight the camera currently sits in. -1 until the RAF
+// loop first resolves; setting it triggers the entry log for that
+// straight. syncFromCurrentMoment resets it so the log fires again on
+// the next entry after a corridor teardown.
+let currentStraightIdx = -1;
 const chart: number[] = [];
 let prevEndSlot: number | null = null;
 
@@ -229,12 +238,14 @@ const CUBE_EDGES = new THREE.EdgesGeometry(
   40,
 );
 
+// Returns the StraightObj minus delineatorLog — the caller
+// (appendSection) attaches that field after deriving the spec.
 function buildStraightObj(
   openSlots: readonly number[],
   beats: readonly number[],
   name: string,
   edgeColor: number,
-): StraightObj {
+): Omit<StraightObj, "delineatorLog"> {
   const tunnel = createTunnel();
   // setHdrEdgeColor re-remembers the base hex + re-applies the current
   // emissive strength. Survives Post-panel live edits.
@@ -340,8 +351,12 @@ function densityTierForSection(audioSection: AudioSection | null): ResolvedTier 
 }
 
 function edgeColorForSection(audioSection: AudioSection | null): number {
+  // Default to COLOR_EDGE (not the palette[0]) when no analysis has
+  // landed yet, since that's the baseline boot state — colorForKind
+  // would return cyan here too, but this route doesn't depend on the
+  // palette happening to start with cyan.
   if (!audioSection) return COLOR_EDGE;
-  return SECTION_EDGE_PALETTE[audioSection.kind % SECTION_EDGE_PALETTE.length];
+  return colorForKind(audioSection.kind);
 }
 
 // Mounts a section into the scene and keeps `sections` / `straightObjects`
@@ -377,20 +392,40 @@ function appendSection(section: Section): void {
     section.pathStart,
     PHRASE_LENGTH,
   );
+  // Kind drives shape/pulse/color. Section (audioSec.startBeat) drives
+  // layout + density — every analyzer-section boundary flips them,
+  // including consecutive same-kind sections. Phrase-block drives
+  // size + rotation drift inside a section.
   const delineatorSpec = specForDelineators(
     audioSec?.kind ?? null,
-    idx,
+    audioSec?.startBeat ?? 0,
     phraseIndex,
+    colorForKind(audioSec?.kind ?? null),
   );
   const delineators = createDelineatorSet(delineatorSpec);
   obj.group.add(delineators.object);
   registerDelineatorSet(delineators);
-  obj.group.position.copy(section.position);
-  obj.group.rotation.y = section.yaw;
-  scene.add(obj.group);
-  obj.group.updateMatrixWorld(true);
-  straightObjects.push(obj);
-  if (debugView) registerStraightDebugHelpers(obj);
+  // Prebuild the log string at construction; emission is deferred to
+  // the RAF loop, firing when the camera actually crosses into the
+  // straight. Rot printed in degrees for readability.
+  const rotDeg = delineatorSpec.rotation.map((r) =>
+    Math.round((r * 180) / Math.PI),
+  );
+  const delineatorLog =
+    `[delineator] straight=${idx} kind=${audioSec?.kind ?? "—"} ` +
+    `phrase=${phraseIndex} shape=${delineatorSpec.shape} ` +
+    `layout=${delineatorSpec.layout} density=${delineatorSpec.density} ` +
+    `pulse=${delineatorSpec.pulse} ` +
+    `color=#${delineatorSpec.colorHex.toString(16).padStart(6, "0")} ` +
+    `size=${delineatorSpec.sizeScale.toFixed(2)} ` +
+    `rot=[${rotDeg.join(",")}]`;
+  const objWithLog: StraightObj = { ...obj, delineatorLog };
+  objWithLog.group.position.copy(section.position);
+  objWithLog.group.rotation.y = section.yaw;
+  scene.add(objWithLog.group);
+  objWithLog.group.updateMatrixWorld(true);
+  straightObjects.push(objWithLog);
+  if (debugView) registerStraightDebugHelpers(objWithLog);
 }
 
 // Walk every already-built straight and re-set its tunnel edge color from
@@ -410,6 +445,13 @@ function recolorStraightsFromAnalysis(): void {
   }
 }
 
+// Rebuild the delineator set for every already-built straight using
+// the now-known audio kind. Without this, boot-lookahead straights
+// (built at kind=null) keep their null-kind shape/layout/density/pulse
+// forever, producing a visible layout flip on the first post-analysis
+// straight. Drops the old mesh + material, swaps in the new spec,
+// updates the registry and the entry log. Player sees a one-frame pop
+// when it runs, typically before they click start.
 // Single landing point for a new SongAnalysis — initial load, editor
 // save, and beat-sync recompute all funnel through here so derived
 // state (forward speed, max loudness, corridor straight colors,
@@ -425,6 +467,15 @@ function commitAnalysisUpdate(
     (m, s) => Math.max(m, s.avgLoudness),
     0,
   );
+  // First-time build: corridor geometry waits for analysis so every
+  // straight (and its delineators) is created with the correct kind.
+  // Guarded so re-entry from editor-save / beat-sync doesn't double up
+  // — those paths either leave the existing corridor in place or tear
+  // it down and rebuild from their own flow.
+  if (sections.length === 0) {
+    ensureSectionsAhead(0);
+    placeMarkersUpTo(SECTION_LOOKAHEAD);
+  }
   recolorStraightsFromAnalysis();
   waveform.setSongStructure(next.bpm, gridOffsetSec, next.sections);
 }
@@ -589,11 +640,13 @@ let songAnalysis: SongAnalysis | null = null;
 let songMaxLoudness = 0;
 
 
-// Seed the corridor with enough sections to cover the lookahead before the
-// first frame renders. ensureSectionsAhead appends straights/turns until
-// there's headroom past the given pathS.
-ensureSectionsAhead(0);
-placeMarkersUpTo(SECTION_LOOKAHEAD);
+// Corridor build is deferred until analysis lands — see
+// commitAnalysisUpdate. Until then the scene is empty behind the title
+// screen; the player sees logo + "loading audio…". Building at boot
+// with kind=null then reconciling later was error-prone (visible layout
+// flip at the boundary between boot and post-analysis straights), and
+// the 15-second analysis window is short enough that nothing is lost by
+// waiting.
 syncResolution();
 
 const waveform = new WaveformOverlay({ onSeek: seekToWaveformClick });
@@ -1770,6 +1823,26 @@ renderer.setAnimationLoop(() => {
   debugView.updatePlayerBox(camera.position);
   waveform.draw(getSongTimeSec());
 
+  // Entry-time delineator log. Walk sections[] to find the straight
+  // that currently contains pathS; fire the prebuilt log line once
+  // per enter. Turns return -1 and leave currentStraightIdx untouched,
+  // so the next straight's entry is still a change event.
+  for (let i = 0; i < sections.length; i++) {
+    const sec = sections[i];
+    if (
+      sec.kind === "straight" &&
+      pathS >= sec.pathStart &&
+      pathS < sec.pathStart + sec.length
+    ) {
+      if (i !== currentStraightIdx) {
+        currentStraightIdx = i;
+        const obj = straightObjects[i];
+        if (obj) console.log(obj.delineatorLog);
+      }
+      break;
+    }
+  }
+
   // Beat-synced delineator pulses. pathS-based so they lock to the
   // corridor's visual beat (which equals audio beats, since
   // currentForwardSpeed is BPM-derived). Phases are independent windows
@@ -1869,6 +1942,7 @@ function syncFromCurrentMoment(): void {
   turnsBuilt = 0;
   edgeMaterials.length = 0;
   clearDelineatorRegistry();
+  currentStraightIdx = -1;
 
   for (const m of markers) scene.remove(m);
   markers.length = 0;

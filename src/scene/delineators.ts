@@ -51,7 +51,10 @@ export interface DelineatorSpec {
   pulse: Pulse;
   colorHex: number;
   sizeScale: number;
-  rotationOffset: number; // radians, yaw applied to every instance
+  // Full Euler (x, y, z) in radians. All instances in a set share
+  // this rotation so they read as a coherent row. Picked from the
+  // ALIGNED_POSES table — never arbitrary.
+  rotation: [number, number, number];
 }
 
 const SHAPES: readonly Shape[] = ["cube", "tetra", "capsule"];
@@ -75,54 +78,85 @@ const PULSES: readonly Pulse[] = [
 ];
 const DENSITIES: readonly Density[] = [1, 2, 4];
 
-// Distinct from SECTION_EDGE_PALETTE so delineators don't blend into
-// the wall edges — pure-channel primaries bloom hardest.
-const DELINEATOR_COLORS: readonly number[] = [
-  0x00ffff, // cyan
-  0xff44aa, // hot pink
-  0xffaa22, // amber
-  0x66ff66, // lime
-  0xaa66ff, // violet
-  0xff6644, // coral
-];
-
 function pickFrom<T>(arr: readonly T[], rng: () => number): T {
   return arr[Math.floor(rng() * arr.length)] as T;
 }
 
-// Generate a spec from the 3 variation axes. Hash seeds are constants
-// so two calls with identical inputs are bit-identical.
+// Aligned-pose palette. Every entry is a multiple of 45° on at most
+// one axis, so shapes land in intentional orientations regardless of
+// which shape was picked for the kind:
+//   - Cubes look identical at yaw {0, 90, 180, 270} but distinct at
+//     roll/pitch 45° (diamond silhouette).
+//   - Tetrahedrons benefit from any non-identity rotation.
+//   - Capsules are Y-axis-symmetric, so yaw doesn't change them —
+//     roll/pitch 90° and 45° flip the post between vertical, lateral,
+//     and forward orientations.
+// 70/30 weight on 90°/identity vs 45° — "most rotations in 90°, less
+// in 45°" per the design spec.
+const POSES_ALIGNED: ReadonlyArray<[number, number, number]> = [
+  [0, 0, 0],               // upright
+  [0, Math.PI / 2, 0],     // yaw 90°
+  [Math.PI / 2, 0, 0],     // pitch 90° — lying forward
+  [0, 0, Math.PI / 2],     // roll 90° — lying lateral
+];
+const POSES_DIAGONAL: ReadonlyArray<[number, number, number]> = [
+  [0, Math.PI / 4, 0],     // yaw 45° — cube diamond from top
+  [Math.PI / 4, 0, 0],     // pitch 45° — tipped forward
+  [0, 0, Math.PI / 4],     // roll 45° — diamond from the side
+];
+function pickRotation(rng: () => number): [number, number, number] {
+  const useDiag = rng() >= 0.7;
+  const table = useDiag ? POSES_DIAGONAL : POSES_ALIGNED;
+  return table[Math.floor(rng() * table.length)] as [number, number, number];
+}
+
+// Generate a spec from the variation axes. Hash seeds are constants
+// so two calls with identical inputs are bit-identical. Color comes
+// from the caller (see src/section-palette.ts) so tunnel edges and
+// delineators stay in lockstep under the same kind.
+//
+// Hierarchy:
+//   - KIND: shape, pulse, color. The "musical identity" — all verses
+//     share these; all choruses share these; they differ.
+//   - SECTION (audio-analyzer boundary, every solid white line in the
+//     waveform): layout, density. Signals arrangement change within a
+//     kind. Two consecutive same-kind sections produce different
+//     layouts/densities.
+//   - PHRASE BLOCK (every 2 phrases = 4 corridors): size, rotation.
+//     Subtle drift within a section.
+//
+// `sectionKey` must be stable across straights within the same
+// analyzer section — pass audioSec.startBeat, NOT the straight index.
 export function specForDelineators(
   kind: number | null,
-  sectionIndex: number,
+  sectionKey: number,
   phraseIndex: number,
+  colorHex: number,
 ): DelineatorSpec {
   const k = kind ?? -1;
   const kindSeed = (k + 1) * 131 + 7;
-  const sectionSeed = kindSeed * 17 + sectionIndex * 73;
+  const sectionSeed = kindSeed * 17 + Math.floor(sectionKey) * 73;
   const phraseBlockSeed =
     sectionSeed * 11 + Math.floor(phraseIndex / 2) * 97;
 
-  // Kind-level: stays constant for the whole kind. Shape, pulse, color.
+  // Kind-level: shape, pulse (color is caller-provided, also kind-keyed).
   const rngKind = mulberry32(kindSeed);
   const shape = pickFrom(SHAPES, rngKind);
   const pulse = pickFrom(PULSES, rngKind);
-  const colorHex =
-    DELINEATOR_COLORS[
-      Math.floor(rngKind() * DELINEATOR_COLORS.length)
-    ] as number;
 
-  // Section-level: changes per audio-section boundary within a kind.
-  // Layout + density.
+  // Section-level: flips on every audio-section boundary, including
+  // consecutive same-kind sections.
   const rngSection = mulberry32(sectionSeed);
   const layout = pickFrom(LAYOUTS, rngSection);
   const density = pickFrom(DENSITIES, rngSection);
 
-  // Phrase-block-level: changes every 2 phrases. Size + yaw jitter
-  // so the delineators nudge without breaking the look.
+  // Phrase-block-level: changes every 2 phrases. Size + pose step so
+  // the delineators nudge without breaking the look. Pose is picked
+  // from the shape-agnostic ALIGNED_POSES table so cubes, tetras and
+  // capsules all land in intentional orientations.
   const rngPhrase = mulberry32(phraseBlockSeed);
   const sizeScale = 0.7 + rngPhrase() * 0.6; // 0.7–1.3
-  const rotationOffset = rngPhrase() * Math.PI * 2;
+  const rotation = pickRotation(rngPhrase);
 
   return {
     shape,
@@ -131,7 +165,7 @@ export function specForDelineators(
     pulse,
     colorHex,
     sizeScale,
-    rotationOffset,
+    rotation,
   };
 }
 
@@ -248,8 +282,10 @@ export function createDelineatorSet(spec: DelineatorSpec): DelineatorSet {
   const baseSize = BASE_SIZE * spec.sizeScale;
 
   const proto = baseShapeGeometry(spec.shape, baseSize);
-  const rotation = new THREE.Matrix4().makeRotationY(spec.rotationOffset);
-  proto.applyMatrix4(rotation);
+  const rotMatrix = new THREE.Matrix4().makeRotationFromEuler(
+    new THREE.Euler(spec.rotation[0], spec.rotation[1], spec.rotation[2]),
+  );
+  proto.applyMatrix4(rotMatrix);
 
   const placements = placementsForLayout(spec.layout, countAlongZ);
   const pieces: THREE.BufferGeometry[] = [];
@@ -287,8 +323,24 @@ export function registerDelineatorSet(set: DelineatorSet): void {
   registry.push(set);
 }
 
+export function unregisterDelineatorSet(set: DelineatorSet): void {
+  const i = registry.indexOf(set);
+  if (i !== -1) registry.splice(i, 1);
+}
+
 export function clearDelineatorRegistry(): void {
   registry.length = 0;
+}
+
+// Dispose the GPU resources owned by a delineator set. Called by the
+// main-thread rebuild path when analysis lands after boot-time
+// straights were already created — without disposing, each re-generate
+// leaks the merged geometry and material.
+export function disposeDelineatorSet(set: DelineatorSet): void {
+  const mesh = set.object as THREE.Mesh;
+  const geom = mesh.geometry as THREE.BufferGeometry | undefined;
+  geom?.dispose();
+  set.material.dispose();
 }
 
 // Exponential-decay "blink": peak at phase 0, decays across the window.
