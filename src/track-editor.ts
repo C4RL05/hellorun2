@@ -5,7 +5,7 @@
 // from the current bpm + gridOffset overlay it. Interactions:
 //   - mouse wheel       → zoom centered on cursor x
 //   - RMB drag          → pan visible window left/right
-//   - LMB click         → seek + audition from cursor
+//   - LMB press/release → audition from cursor while held
 //   - LMB drag          → shift the beat grid (changes gridOffsetSec)
 //
 // Audio preview is fully decoupled from the game's audio source so opening
@@ -417,10 +417,17 @@ export class TrackEditor {
       this.dragMode = "pan";
       this.dragStartViewStart = this.viewStartSec;
     } else if (e.button === 0) {
-      // LMB: maybe click (seek), or drag (shift grid). Decide on first
-      // movement past threshold.
+      // LMB: audition-while-held. Preview starts immediately from the
+      // pressed x and stops on release (or drag end, both funnel through
+      // onMouseUp). Drag past threshold switches into "grid" mode and
+      // shifts the beat grid; audio keeps playing during the drag so the
+      // user can hear the grid line up as they nudge it.
       this.dragMode = "maybeClick";
       this.dragStartGridOffsetSec = this.gridOffsetSec;
+      const w = this.canvas.clientWidth;
+      const t = Math.max(0, Math.min(this.duration, this.xToTime(this.dragStartX, w)));
+      this.startPreviewAt(t);
+      this.draw();
     }
   };
 
@@ -455,14 +462,10 @@ export class TrackEditor {
 
   private onMouseUp = (e: MouseEvent) => {
     if (this.dragMode === "none") return;
-    const wasMaybeClick = this.dragMode === "maybeClick";
     this.dragMode = "none";
-    if (wasMaybeClick && e.button === 0) {
-      // Pure click: seek + audition from cursor x.
-      const w = this.canvas.clientWidth;
-      const x = this.clientXToCanvasX(e.clientX);
-      const t = Math.max(0, Math.min(this.duration, this.xToTime(x, w)));
-      this.startPreviewAt(t);
+    if (e.button === 0) {
+      // LMB release ends audition (preview started on press).
+      this.stopPreview();
       this.draw();
     }
   };

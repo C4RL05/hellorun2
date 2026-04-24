@@ -2,6 +2,7 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { MARKER_EDGE_WIDTH_PX } from "../constants";
+import { setHdrEdgeColor } from "../hdr-edges";
 
 // Square border (no fill) in the local XY plane, centered at origin.
 // Caller positions/rotates the result to align perpendicular to the path.
@@ -22,11 +23,13 @@ function getMaterial(color: number): LineMaterial {
   let mat = sharedMaterials.get(color);
   if (!mat) {
     mat = new LineMaterial({
-      color,
       linewidth: MARKER_EDGE_WIDTH_PX,
       depthTest: false,
       transparent: true,
     });
+    // HDR: musical-structure markers bloom hardest — pure-channel
+    // primaries hit luminance > 1.0 at strength 2.5.
+    setHdrEdgeColor(mat, color);
     sharedMaterials.set(color, mat);
   }
   return mat;

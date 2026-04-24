@@ -18,6 +18,26 @@
         padding: 0;
         overflow: hidden;
         background: #000;
+        /* Dark-mode scrollbars. `color-scheme: dark` triggers the
+           browser's dark built-in scrollbar rendering on Chromium +
+           Firefox; the webkit rules below cover Safari and give
+           Chromium a tighter look than the default dark track. */
+        color-scheme: dark;
+        scrollbar-color: rgba(255, 255, 255, 0.4) rgba(0, 0, 0, 0.2);
+      }
+      ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      ::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.2);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.25);
+        border-radius: 2px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.5);
       }
       canvas {
         display: block;
@@ -458,6 +478,155 @@
         background: rgba(255, 255, 255, 0.12);
         border-color: rgba(255, 255, 255, 1);
       }
+      /* Post panel: dense list of numeric rows + a small button row at
+         the bottom. Scrolls within the pane when the full list
+         overflows a narrow menu. */
+      .post-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        max-height: 70vh;
+        overflow-y: auto;
+        /* stable scrollbar gutter so content doesn't shift by ~10px
+           when the scrollbar appears/disappears on tall content. */
+        scrollbar-gutter: stable;
+        padding-right: 0.5rem;
+        /* Bottom padding keeps the last button off the scroll-area
+           edge — without it, hover-induced subpixel reflows can clip
+           the bottom border at short viewports. */
+        padding-bottom: 0.5rem;
+        font-size: 0.75rem;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .post-section-header {
+        margin-top: 0.75rem;
+        padding-bottom: 0.15rem;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.3);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        opacity: 0.65;
+        font-size: 0.7rem;
+      }
+      .post-section-header:first-child { margin-top: 0; }
+      .post-row {
+        display: grid;
+        grid-template-columns: 11rem 1fr;
+        align-items: center;
+        gap: 0.75rem;
+      }
+      .post-row label {
+        opacity: 0.7;
+      }
+      .post-row select {
+        background: #0a0a0a;
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        font: inherit;
+        font-size: 0.75rem;
+        padding: 0.2rem 0.4rem;
+        width: 100%;
+        box-sizing: border-box;
+        text-transform: none;
+      }
+      .post-row select:focus {
+        outline: none;
+        border-color: rgba(255, 255, 255, 0.85);
+      }
+      /* Native <option> elements render through the OS popup on Chrome/
+         Windows and don't inherit transparent select colors. Force
+         explicit background+color so the list is readable when open. */
+      .post-row select option {
+        background: #0a0a0a;
+        color: #ffffff;
+      }
+      .post-row select option:checked {
+        background: #1a1a1a;
+      }
+      /* Custom horizontal stepper: < [input] > with transparent
+         chevron buttons. Native browser spinners are hidden. */
+      .post-number {
+        display: flex;
+        align-items: stretch;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+      }
+      .post-number:focus-within {
+        border-color: rgba(255, 255, 255, 0.85);
+      }
+      .post-number input[type="number"] {
+        flex: 1;
+        min-width: 0;
+        background: transparent;
+        color: #ffffff;
+        border: 0;
+        font: inherit;
+        font-size: 0.75rem;
+        padding: 0.2rem 0.4rem;
+        text-align: left;
+        text-transform: none;
+        -moz-appearance: textfield;
+      }
+      .post-number input[type="number"]:focus {
+        outline: none;
+      }
+      .post-number input[type="number"]::-webkit-inner-spin-button,
+      .post-number input[type="number"]::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      .post-step {
+        background: transparent;
+        color: #ffffff;
+        border: 0;
+        cursor: pointer;
+        padding: 0 0.35rem;
+        font: inherit;
+        font-size: 0.8rem;
+        line-height: 1;
+        opacity: 0.45;
+        transition: opacity 0.12s;
+        user-select: none;
+      }
+      /* Tighten the gap between adjacent < and > — they read as a pair,
+         so the inner edges get minimal padding while the outer edges
+         keep breathing room from the input. */
+      .post-step:has(+ .post-step) { padding-right: 0.1rem; }
+      .post-step + .post-step { padding-left: 0.1rem; }
+      .post-step:hover { opacity: 1; }
+      .post-step:active { opacity: 0.7; }
+      .post-vec3 {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 0.4rem;
+      }
+      .post-buttons {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.4rem;
+      }
+      .post-buttons button {
+        flex: 1;
+        background: transparent;
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.55);
+        font: inherit;
+        font-size: 0.75rem;
+        padding: 0.4rem 0.6rem;
+        cursor: pointer;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .post-buttons button:hover {
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 1);
+      }
+      /* Post pane needs more breathing room than the default tabs — the
+         dense grid of numeric rows pushes against the modal's min
+         width. */
+      .user-modal:has(.user-pane[data-pane="post"].active) {
+        min-width: 34rem;
+      }
     </style>
   </head>
   <body>
@@ -521,6 +690,7 @@
         <nav class="user-tabs">
           <button class="user-tab active" type="button" data-tab="settings">settings</button>
           <button class="user-tab" type="button" data-tab="music">music</button>
+          <button class="user-tab" type="button" data-tab="post" data-dev-only>post</button>
           <button class="user-tab" type="button" data-tab="dev" data-dev-only>dev</button>
         </nav>
         <div class="user-panes">
@@ -532,6 +702,9 @@
               <li class="track-empty">no tracks loaded yet</li>
             </ul>
             <div id="drop-zone">drag mp3 here or click to browse</div>
+          </section>
+          <section class="user-pane" data-pane="post" data-dev-only>
+            <div id="post-panel-root"></div>
           </section>
           <section class="user-pane" data-pane="dev" data-dev-only>
             <button id="dev-export-analysis" type="button">export analysis sidecar</button>

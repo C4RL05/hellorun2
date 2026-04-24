@@ -81,6 +81,11 @@ import { PlayerController } from "./player";
 import { createGates } from "./scene/gates";
 import { createMarker, updateMarkerResolution } from "./scene/markers";
 import { createTunnel } from "./scene/tunnel";
+import { createHdrPipeline, applyPostSettings } from "./render-pipeline";
+import { setHdrEdgeColor, setEdgeEmissiveStrength } from "./hdr-edges";
+import { loadPostSettings, DEFAULT_POST_SETTINGS } from "./post-settings";
+import type { PostSettings } from "./post-settings";
+import { mountPostPanel } from "./post-panel";
 import { WaveformOverlay } from "./waveform";
 import { devSong } from "./songs";
 
@@ -113,6 +118,47 @@ const keyLight = new THREE.DirectionalLight(0xffffff, 0.6);
 keyLight.position.set(1, 2, 1);
 scene.add(keyLight);
 scene.add(new THREE.AmbientLight(0xffffff, 0.08));
+
+// HDR composer: replaces the bare renderer.render(scene, camera) for the
+// game view. The debug-overlay pass keeps using the bare renderer so its
+// bboxes don't get tone-mapped or bloomed. See docs/hdr-pipeline.md.
+//
+// Boots with DEFAULT_POST_SETTINGS (from constants.ts feel-spec) and
+// asynchronously overlays whatever's in public/post-settings.json once
+// fetched. The fetch resolves within ~10ms typically; the brief flash
+// of defaults before the JSON lands is imperceptible.
+const postSettings: PostSettings = {
+  ...DEFAULT_POST_SETTINGS,
+  bloom: { ...DEFAULT_POST_SETTINGS.bloom },
+  colorGrade: {
+    ...DEFAULT_POST_SETTINGS.colorGrade,
+    shadowTint: [...DEFAULT_POST_SETTINGS.colorGrade.shadowTint],
+    highlightTint: [...DEFAULT_POST_SETTINGS.colorGrade.highlightTint],
+  },
+};
+setEdgeEmissiveStrength(postSettings.edgeEmissiveStrength);
+const hdr = createHdrPipeline(renderer, scene, camera, postSettings);
+
+void loadPostSettings().then((loaded) => {
+  Object.assign(postSettings, {
+    edgeEmissiveStrength: loaded.edgeEmissiveStrength,
+    exposure: loaded.exposure,
+    toneMapping: loaded.toneMapping,
+    bloom: { ...loaded.bloom },
+    colorGrade: {
+      ...loaded.colorGrade,
+      shadowTint: [...loaded.colorGrade.shadowTint],
+      highlightTint: [...loaded.colorGrade.highlightTint],
+    },
+  });
+  applyPostSettings(hdr, postSettings);
+  // Re-render the panel so inputs reflect the loaded values (if the
+  // user opened the menu fast enough to see the default-valued
+  // panel). Safe no-op in production builds where post-panel-root is
+  // pruned by data-dev-only handling.
+  const root = document.getElementById("post-panel-root");
+  if (devMode && root) mountPostPanel(root, postSettings, hdr);
+});
 
 const edgeMaterials: LineMaterial[] = [];
 
@@ -180,7 +226,9 @@ function buildStraightObj(
   edgeColor: number,
 ): StraightObj {
   const tunnel = createTunnel();
-  tunnel.edgeMaterial.color.setHex(edgeColor);
+  // setHdrEdgeColor re-remembers the base hex + re-applies the current
+  // emissive strength. Survives Post-panel live edits.
+  setHdrEdgeColor(tunnel.edgeMaterial, edgeColor);
   const gates = createGates(openSlots, beats);
   edgeMaterials.push(tunnel.edgeMaterial, gates.edgeMaterial);
   const group = new THREE.Group();
@@ -333,7 +381,7 @@ function recolorStraightsFromAnalysis(): void {
     const sec = sections[i];
     if (!obj || !sec || sec.kind !== "straight") continue;
     const audioSec = audioSectionForPathS(sec.pathStart);
-    obj.tunnelEdgeMaterial.color.setHex(edgeColorForSection(audioSec));
+    setHdrEdgeColor(obj.tunnelEdgeMaterial, edgeColorForSection(audioSec));
   }
 }
 
@@ -486,6 +534,7 @@ const syncResolution = () => {
 
 addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
+  hdr.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   syncResolution();
@@ -1081,6 +1130,9 @@ if (!devMode) {
   userMenu
     ?.querySelectorAll<HTMLElement>("[data-dev-only]")
     .forEach((el) => el.remove());
+} else {
+  const postPanelRoot = document.getElementById("post-panel-root");
+  if (postPanelRoot) mountPostPanel(postPanelRoot, postSettings, hdr);
 }
 // True only if the menu is the reason the game is paused — so closing
 // the menu knows to unpause, but explicitly user-paused games (Space)
@@ -1675,10 +1727,11 @@ renderer.setAnimationLoop(() => {
   debugView.updatePlayerBox(camera.position);
   waveform.draw(getSongTimeSec());
 
-  // Main render: full-viewport game view, clearing both color and depth.
+  // Main render: full-viewport HDR game view via the composer. The
+  // composer manages its own clearing and writes the tone-mapped result
+  // directly to the canvas.
   renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
-  renderer.clear();
-  renderer.render(scene, camera);
+  hdr.composer.render();
 
   // Debug overlay: helpers drawn on top with a fresh depth buffer but the
   // same color buffer — the game view shows wherever helper lines don't

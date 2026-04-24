@@ -15,6 +15,7 @@ import {
   GATE_THICKNESS,
   SLOT_COUNT,
 } from "../constants";
+import { setHdrEdgeColor } from "../hdr-edges";
 
 export interface BarrierInfo {
   readonly localCenter: THREE.Vector3;
@@ -117,10 +118,10 @@ export function createGates(
     depthWrite: false,
     side: THREE.DoubleSide,
   });
-  const edgeMaterial = new LineMaterial({
-    color: COLOR_BARRIER_EDGE,
-    linewidth: EDGE_WIDTH_PX,
-  });
+  const edgeMaterial = new LineMaterial({ linewidth: EDGE_WIDTH_PX });
+  // HDR: danger-red edges bloom hard — luminance of pure red × 2.5 is
+  // 0.83, just above threshold, so barriers read as glowing.
+  setHdrEdgeColor(edgeMaterial, COLOR_BARRIER_EDGE);
 
   const group = new THREE.Group();
   group.add(new THREE.Mesh(mergedFill, fillMaterial));

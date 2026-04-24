@@ -86,6 +86,30 @@ export const CUBE_JITTER_DEG = 10;
 // screen-space triangle-strip lines instead.
 export const EDGE_WIDTH_PX = 2;
 
+// HDR pipeline (plan §5/§6, docs/hdr-pipeline.md).
+//
+// The composer uses a HalfFloatType framebuffer so colors > 1.0 survive
+// between passes. Edge LineMaterials get their RGB multiplied by
+// EDGE_EMISSIVE_STRENGTH on creation / recolor so the Bloom pass (which
+// only extracts luminance > BLOOM_THRESHOLD) picks them up while the
+// Lambert-shaded faces stay ≤ 1.0 and don't bloom. Bloom runs BEFORE
+// exposure + tone-mapping — threshold is compared against raw scene
+// colors, so BLOOM_THRESHOLD is decoupled from EXPOSURE as a knob.
+// ACES Filmic is the SDR compressor; rolls saturated neon to white at
+// the bloom core instead of hard-clipping to a primary.
+export const EDGE_EMISSIVE_STRENGTH = 2.5;
+export const BLOOM_STRENGTH = 0.6;
+export const BLOOM_THRESHOLD = 1.0;
+export const BLOOM_RADIUS = 0.5;
+export const BLOOM_SMOOTHING = 0.03;
+export const BLOOM_LEVELS = 8;
+// Exposure held at 1.0: the emissive multiplier above already pushes
+// edges well into HDR, and ACES Filmic tone mapping desaturates hard if
+// we additionally gain by 2× — cyan tunnel edges would bleach to white.
+// The "high in the moment" reference at exposure=2 is going for that
+// bleached look; we want the Tron neon to keep its hue.
+export const HDR_EXPOSURE = 1.0;
+
 // Gates (plan §2, milestones 4 and 7; §5 section-driven density).
 //
 // Each 2-bar phrase (8 beats at 4/4) breaks into 7 straight-beats + 1

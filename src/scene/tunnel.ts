@@ -13,6 +13,7 @@ import {
   TUNNEL_HEIGHT,
   TUNNEL_WIDTH,
 } from "../constants";
+import { setHdrEdgeColor } from "../hdr-edges";
 
 export interface TunnelScene {
   object: THREE.Object3D;
@@ -77,10 +78,11 @@ export function createTunnel(): TunnelScene {
   mergedEdgeSegments.dispose();
 
   const fillMaterial = new THREE.MeshLambertMaterial({ color: COLOR_FACE });
-  const edgeMaterial = new LineMaterial({
-    color: COLOR_EDGE,
-    linewidth: EDGE_WIDTH_PX,
-  });
+  const edgeMaterial = new LineMaterial({ linewidth: EDGE_WIDTH_PX });
+  // HDR: lift color past bloom threshold. setHdrEdgeColor also
+  // registers the material so the Post settings panel's emissive slider
+  // can refresh it live.
+  setHdrEdgeColor(edgeMaterial, COLOR_EDGE);
 
   const group = new THREE.Group();
   group.add(new THREE.Mesh(mergedFill, fillMaterial));

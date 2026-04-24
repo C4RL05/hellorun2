@@ -1,0 +1,29 @@
+{
+  "edgeEmissiveStrength": 2.5,
+  "exposure": 1.0,
+  "toneMapping": "aces",
+  "bloom": {
+    "intensity": 0.6,
+    "threshold": 1.0,
+    "smoothing": 0.03,
+    "radius": 0.5
+  },
+  "colorGrade": {
+    "contrast": 1.0,
+    "contrastPivot": 0.5,
+    "saturation": 1.0,
+    "temperature": 0.0,
+    "tint": 0.0,
+    "temperatureStrength": 0.1,
+    "lift": 0.0,
+    "gamma": 1.0,
+    "gain": 1.0,
+    "blackLevel": 0.0,
+    "whiteLevel": 1.0,
+    "shadowTint": [1, 1, 1],
+    "highlightTint": [1, 1, 1],
+    "vignette": 0.0,
+    "vignetteRadius": 1.0,
+    "vignetteSoftness": 0.5
+  }
+}
