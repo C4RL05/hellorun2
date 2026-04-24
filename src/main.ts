@@ -82,12 +82,11 @@ import { createGates } from "./scene/gates";
 import { createMarker, updateMarkerResolution } from "./scene/markers";
 import { createTunnel } from "./scene/tunnel";
 import {
-  createDelineatorSet,
+  createDelineatorsFromSpec,
   registerDelineatorSet,
   clearDelineatorRegistry,
   specForDelineators,
   updateDelineatorPulses,
-  phraseIndexForPathStart,
 } from "./scene/delineators";
 import { createHdrPipeline, applyPostSettings } from "./render-pipeline";
 import { setHdrEdgeColor, setEdgeEmissiveStrength } from "./hdr-edges";
@@ -385,40 +384,31 @@ function appendSection(section: Section): void {
     `straight-${idx}`,
     edgeColorForSection(audioSec),
   );
-  // Delineators live inside the straight's group so they transform
-  // with its pose. Spec is deterministic from (kind, sectionIndex,
-  // phraseIndex) — same song replays place the same lights.
-  const phraseIndex = phraseIndexForPathStart(
-    section.pathStart,
-    PHRASE_LENGTH,
-  );
-  // Kind drives shape/pulse/color. Section (audioSec.startBeat) drives
-  // layout + density — every analyzer-section boundary flips them,
-  // including consecutive same-kind sections. Phrase-block drives
-  // size + rotation drift inside a section.
+  // specForDelineators picks 1-3 independent types from the catalog;
+  // createDelineatorsFromSpec builds each one's mesh with the shared
+  // section color. Deterministic from (kind, startBeat, phraseIndex)
+  // — same song replays place the same lights.
+  const phraseIndex = Math.floor(section.pathStart / PHRASE_LENGTH);
   const delineatorSpec = specForDelineators(
     audioSec?.kind ?? null,
     audioSec?.startBeat ?? 0,
     phraseIndex,
-    colorForKind(audioSec?.kind ?? null),
   );
-  const delineators = createDelineatorSet(delineatorSpec);
-  obj.group.add(delineators.object);
-  registerDelineatorSet(delineators);
-  // Prebuild the log string at construction; emission is deferred to
-  // the RAF loop, firing when the camera actually crosses into the
-  // straight. Rot printed in degrees for readability.
-  const rotDeg = delineatorSpec.rotation.map((r) =>
-    Math.round((r * 180) / Math.PI),
-  );
+  const colorHex = colorForKind(audioSec?.kind ?? null);
+  const delineators = createDelineatorsFromSpec(delineatorSpec, colorHex);
+  for (const set of delineators) {
+    obj.group.add(set.object);
+    registerDelineatorSet(set);
+  }
+  // Prebuilt log line. Fires from the RAF entry detector on corridor
+  // crossing. `summary` is a joined per-type description ("cateye[…]
+  // + other[…]"). One log per corridor regardless of how many types
+  // the spec picked.
   const delineatorLog =
     `[delineator] straight=${idx} kind=${audioSec?.kind ?? "—"} ` +
-    `phrase=${phraseIndex} shape=${delineatorSpec.shape} ` +
-    `layout=${delineatorSpec.layout} density=${delineatorSpec.density} ` +
-    `pulse=${delineatorSpec.pulse} ` +
-    `color=#${delineatorSpec.colorHex.toString(16).padStart(6, "0")} ` +
-    `size=${delineatorSpec.sizeScale.toFixed(2)} ` +
-    `rot=[${rotDeg.join(",")}]`;
+    `phrase=${phraseIndex} ` +
+    `color=#${colorHex.toString(16).padStart(6, "0")} | ` +
+    delineatorSpec.summary;
   const objWithLog: StraightObj = { ...obj, delineatorLog };
   objWithLog.group.position.copy(section.position);
   objWithLog.group.rotation.y = section.yaw;
@@ -1217,6 +1207,11 @@ if (!devMode) {
   const postPanelRoot = document.getElementById("post-panel-root");
   if (postPanelRoot) mountPostPanel(postPanelRoot, postSettings, hdr);
 }
+
+// About pane shows package.json version, injected at build time via
+// vite.config's `define` so there's no runtime fetch / JSON parse.
+const aboutVersion = document.getElementById("about-version");
+if (aboutVersion) aboutVersion.textContent = `v${__APP_VERSION__}`;
 
 // Invincibility toggle lives in Settings — always available so players
 // can flip it without a keyboard shortcut. aria-pressed is the source
