@@ -383,21 +383,26 @@
         right: 1rem;
         width: 2.5rem;
         height: 2.5rem;
-        background: rgba(0, 0, 0, 0.55);
-        border: 1px solid rgba(255, 255, 255, 0.55);
+        background: transparent;
+        border: 0;
         cursor: pointer;
         z-index: 22;
-        display: flex;
+        display: none;
         flex-direction: column;
         justify-content: center;
         align-items: center;
         gap: 5px;
         padding: 0;
-        transition: border-color 0.15s, background 0.15s;
+        transition: opacity 0.15s;
+        opacity: 0.7;
+      }
+      /* Hidden during initial audio decode/analysis; revealed once the
+         first track is ready to play (or has failed to load). */
+      body.audio-ready #menu-button {
+        display: flex;
       }
       #menu-button:hover {
-        border-color: rgba(255, 255, 255, 1);
-        background: rgba(0, 0, 0, 0.75);
+        opacity: 1;
       }
       #menu-button span {
         display: block;
@@ -477,6 +482,21 @@
       .user-pane > button:hover {
         background: rgba(255, 255, 255, 0.12);
         border-color: rgba(255, 255, 255, 1);
+      }
+      /* Checkbox-style toggle button. `[ ]` / `[x]` prefix reflects
+         the aria-pressed state; JS just flips that attribute. */
+      .toggle-btn::before {
+        content: "[ ]  ";
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        opacity: 0.55;
+      }
+      .toggle-btn[aria-pressed="true"] {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.85);
+      }
+      .toggle-btn[aria-pressed="true"]::before {
+        content: "[x]  ";
+        opacity: 1;
       }
       /* Post panel: dense list of numeric rows + a small button row at
          the bottom. Scrolls within the pane when the full list
@@ -695,7 +715,14 @@
         </nav>
         <div class="user-panes">
           <section class="user-pane active" data-pane="settings">
-            <button type="button">action one</button>
+            <button
+              id="toggle-invincible"
+              type="button"
+              class="toggle-btn"
+              aria-pressed="false"
+            >
+              invincibility
+            </button>
           </section>
           <section class="user-pane" data-pane="music">
             <ul id="track-list" class="track-list">

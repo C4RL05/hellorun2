@@ -81,6 +81,14 @@ import { PlayerController } from "./player";
 import { createGates } from "./scene/gates";
 import { createMarker, updateMarkerResolution } from "./scene/markers";
 import { createTunnel } from "./scene/tunnel";
+import {
+  createDelineatorSet,
+  registerDelineatorSet,
+  clearDelineatorRegistry,
+  specForDelineators,
+  updateDelineatorPulses,
+  phraseIndexForPathStart,
+} from "./scene/delineators";
 import { createHdrPipeline, applyPostSettings } from "./render-pipeline";
 import { setHdrEdgeColor, setEdgeEmissiveStrength } from "./hdr-edges";
 import { loadPostSettings, DEFAULT_POST_SETTINGS } from "./post-settings";
@@ -201,8 +209,10 @@ const chartRand =
   seedParam !== null ? mulberry32(parseInt(seedParam, 10) || 0) : Math.random;
 
 // Developer-mode flag. Gates the keyboard shortcuts for pause (Space),
-// marker toggle (B), debug overlay (M), and invincibility (I) — these are
-// playtest / debug tools, not gameplay. Always on in dev builds; in a
+// marker toggle (B) and debug overlay (M) — these are playtest / debug
+// tools, not gameplay. Invincibility is a Settings-tab toggle (no
+// keyboard shortcut, to avoid accidental mid-play toggles). Always on
+// in dev builds; in a
 // production build, opt in with `?dev` in the URL.
 const devMode = import.meta.env.DEV || urlParams.has("dev");
 
@@ -360,6 +370,21 @@ function appendSection(section: Section): void {
     `straight-${idx}`,
     edgeColorForSection(audioSec),
   );
+  // Delineators live inside the straight's group so they transform
+  // with its pose. Spec is deterministic from (kind, sectionIndex,
+  // phraseIndex) — same song replays place the same lights.
+  const phraseIndex = phraseIndexForPathStart(
+    section.pathStart,
+    PHRASE_LENGTH,
+  );
+  const delineatorSpec = specForDelineators(
+    audioSec?.kind ?? null,
+    idx,
+    phraseIndex,
+  );
+  const delineators = createDelineatorSet(delineatorSpec);
+  obj.group.add(delineators.object);
+  registerDelineatorSet(delineators);
   obj.group.position.copy(section.position);
   obj.group.rotation.y = section.yaw;
   scene.add(obj.group);
@@ -975,10 +1000,15 @@ async function loadAndAnalyzeSource(
     waveform.setAudioBuffer(localAudioBuffer);
     commitAnalysisUpdate(result, result.gridOffsetSec);
     setSubtitle("click to start");
+    // First successful load — surface the menu button. The failure
+    // path does the same since the error copy tells the user to open
+    // the menu.
+    document.body.classList.add("audio-ready");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`failed to load ${label}:`, err);
     setSubtitle(`failed — open menu → music to load (${msg})`);
+    document.body.classList.add("audio-ready");
     // If the row was already created (hash computed before the throw),
     // mark it failed so the user can see what happened and × it. If we
     // failed before the hash (e.g., file read error), there's no row.
@@ -1134,6 +1164,19 @@ if (!devMode) {
   const postPanelRoot = document.getElementById("post-panel-root");
   if (postPanelRoot) mountPostPanel(postPanelRoot, postSettings, hdr);
 }
+
+// Invincibility toggle lives in Settings — always available so players
+// can flip it without a keyboard shortcut. aria-pressed is the source
+// of truth: CSS reads it for the [x]/[ ] prefix, so one attribute
+// update keeps visual + a11y in sync.
+const invincibleToggle = document.getElementById("toggle-invincible");
+invincibleToggle?.addEventListener("click", () => {
+  invincible = !invincible;
+  invincibleToggle.setAttribute(
+    "aria-pressed",
+    invincible ? "true" : "false",
+  );
+});
 // True only if the menu is the reason the game is paused — so closing
 // the menu knows to unpause, but explicitly user-paused games (Space)
 // don't get force-resumed on menu close.
@@ -1727,6 +1770,17 @@ renderer.setAnimationLoop(() => {
   debugView.updatePlayerBox(camera.position);
   waveform.draw(getSongTimeSec());
 
+  // Beat-synced delineator pulses. pathS-based so they lock to the
+  // corridor's visual beat (which equals audio beats, since
+  // currentForwardSpeed is BPM-derived). Phases are independent windows
+  // for pulse patterns that care about bar/phrase granularity.
+  {
+    const beatPhase = (pathS % BEAT_LENGTH) / BEAT_LENGTH;
+    const barPhase = (pathS % BAR_LENGTH) / BAR_LENGTH;
+    const phrasePhase = (pathS % PHRASE_LENGTH) / PHRASE_LENGTH;
+    updateDelineatorPulses(beatPhase, barPhase, phrasePhase);
+  }
+
   // Main render: full-viewport HDR game view via the composer. The
   // composer manages its own clearing and writes the tone-mapped result
   // directly to the canvas.
@@ -1761,16 +1815,15 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     toggleUserMenu();
   }
-  // Dev-only: Space pause, B marker toggle, I invincibility.
+  // Dev-only: Space pause, B marker toggle.
   // M (debug overlay) is gated inside DebugView via its `enabled` option.
+  // Invincibility lives in the Settings menu (always available) — no
+  // keyboard shortcut to avoid accidental toggles during play.
   else if (devMode && e.code === "Space") {
     e.preventDefault(); // don't scroll the page
     togglePause();
   } else if (devMode && e.code === "KeyB") {
     toggleMarkers();
-  } else if (devMode && e.code === "KeyI") {
-    invincible = !invincible;
-    console.log(`invincibility: ${invincible ? "ON" : "OFF"}`);
   }
 });
 
@@ -1815,6 +1868,7 @@ function syncFromCurrentMoment(): void {
   prevEndSlot = null;
   turnsBuilt = 0;
   edgeMaterials.length = 0;
+  clearDelineatorRegistry();
 
   for (const m of markers) scene.remove(m);
   markers.length = 0;
