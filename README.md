@@ -68,5 +68,3 @@ Per-substep detail in [`docs/milestone-status.md`](docs/milestone-status.md).
 ## License
 
 Source: MIT (see [`LICENSE`](LICENSE) if present, else implied by this README pending finalization).
-
-The bundled `testpattern` font in `public/fonts/` is a bespoke pixel font drawn for this project; no third-party license obligations. See [`public/README.md`](public/README.md).
