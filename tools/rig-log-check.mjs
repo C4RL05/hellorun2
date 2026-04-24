@@ -1,4 +1,4 @@
-// Capture the [delineator] console lines for the first 4 straights to
+// Capture the [rig] console lines for the first 4 straights to
 // verify the hash hierarchy lands where expected.
 import { chromium } from "playwright";
 
@@ -7,7 +7,7 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 
 const logs = [];
 page.on("console", (msg) => {
-  if (msg.type() === "log" && msg.text().startsWith("[delineator]")) {
+  if (msg.type() === "log" && msg.text().startsWith("[rig]")) {
     logs.push(msg.text());
   }
 });
@@ -23,7 +23,7 @@ for (const s of [0, 40, 80, 120, 160, 200]) {
   await new Promise((r) => setTimeout(r, 50));
 }
 
-console.log(`captured ${logs.length} delineator lines:`);
+console.log(`captured ${logs.length} rig lines:`);
 for (const line of logs) console.log(line);
 
 await browser.close();

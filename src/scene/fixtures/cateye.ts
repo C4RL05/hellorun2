@@ -2,19 +2,21 @@ import * as THREE from "three";
 import { BEATS_PER_STRAIGHT, TUNNEL_DEPTH, CELL } from "../../constants";
 import { mulberry32 } from "../../chart";
 import type {
-  BuiltDelineators,
-  DelineatorType,
+  BuiltFixture,
+  FixtureType,
+  ParamRanges,
   PulsePattern,
   VariationSeeds,
 } from "./shared";
 import {
-  DELINEATOR_BASE_STRENGTH,
+  FIXTURE_BASE_STRENGTH,
   PULSES,
   pickFrom,
   pickRotation,
+  randomInRange,
 } from "./shared";
 
-// Cat's-eye delineators: small emissive markers (cubes, tetras, or
+// Cat's-eye fixtures: small emissive markers (cubes, tetras, or
 // capsules) placed along the corridor in one of 9 layouts. Purely
 // visual. One InstancedMesh per set — one draw call; per-instance
 // transforms stored in the instance matrix buffer so adding
@@ -55,6 +57,13 @@ const LAYOUTS: readonly Layout[] = [
   "corner-spiral",
 ];
 const DENSITIES: readonly Density[] = [1, 2, 4];
+
+// Editable numeric ranges. Mutable so the editor / JSON loader can
+// override at runtime; specFor below reads through this record.
+// Union-typed params (shape, layout, pulse, density) stay code-driven.
+const ranges: ParamRanges = {
+  sizeScale: { min: 0.7, max: 1.3 },
+};
 
 // Hollow is 1 unit wide/tall; ±0.47 sits 0.03 in from the wall so
 // markers don't z-fight the tunnel fill.
@@ -142,8 +151,9 @@ function placementsForLayout(layout: Layout, count: number): Placement[] {
   return out;
 }
 
-export const cateye: DelineatorType<CateyeParams> = {
+export const cateye: FixtureType<CateyeParams> = {
   name: "cateye",
+  ranges,
 
   specFor({ kindSeed, sectionSeed, phraseBlockSeed }: VariationSeeds): CateyeParams {
     const rngKind = mulberry32(kindSeed);
@@ -155,13 +165,13 @@ export const cateye: DelineatorType<CateyeParams> = {
     const density = pickFrom(DENSITIES, rngSection);
 
     const rngPhrase = mulberry32(phraseBlockSeed);
-    const sizeScale = 0.7 + rngPhrase() * 0.6; // 0.7–1.3
+    const sizeScale = randomInRange(rngPhrase, ranges.sizeScale!);
     const rotation = pickRotation(rngPhrase);
 
     return { shape, layout, density, pulse, sizeScale, rotation };
   },
 
-  build(params: CateyeParams, colorHex: number): BuiltDelineators {
+  build(params: CateyeParams, colorHex: number): BuiltFixture {
     const countAlongZ = BEATS_PER_STRAIGHT * params.density;
     const baseSize = BASE_SIZE * params.sizeScale;
 
@@ -182,7 +192,7 @@ export const cateye: DelineatorType<CateyeParams> = {
     const placements = placementsForLayout(params.layout, countAlongZ);
 
     const material = new THREE.MeshBasicMaterial({ color: colorHex });
-    material.color.multiplyScalar(DELINEATOR_BASE_STRENGTH);
+    material.color.multiplyScalar(FIXTURE_BASE_STRENGTH);
 
     const mesh = new THREE.InstancedMesh(geometry, material, placements.length);
     const m = new THREE.Matrix4();

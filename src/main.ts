@@ -82,19 +82,36 @@ import { createGates } from "./scene/gates";
 import { createMarker, updateMarkerResolution } from "./scene/markers";
 import { createTunnel } from "./scene/tunnel";
 import {
-  createDelineatorsFromSpec,
-  registerDelineatorSet,
-  clearDelineatorRegistry,
-  specForDelineators,
-  updateDelineatorPulses,
-} from "./scene/delineators";
+  buildRig,
+  registerFixture,
+  unregisterFixture,
+  clearFixtureRegistry,
+  disposeFixture,
+  specForRig,
+  randomSingleSpec,
+  updateFixturePulses,
+} from "./scene/fixtures";
+import type { Fixture } from "./scene/fixtures";
 import { createHdrPipeline, applyPostSettings } from "./render-pipeline";
 import { setHdrEdgeColor, setEdgeEmissiveStrength } from "./hdr-edges";
 import { loadPostSettings, DEFAULT_POST_SETTINGS } from "./post-settings";
 import type { PostSettings } from "./post-settings";
 import { mountPostPanel } from "./post-panel";
+import {
+  applyStoredRigFilter,
+  mountRigDevPanel,
+} from "./dev-fixture-panel";
+import { mountRigEditor } from "./dev-fixture-editor";
+import { loadRigRanges } from "./fixture-range-loader";
 import { WaveformOverlay } from "./waveform";
 import { devSong } from "./songs";
+
+// Menu-toggle persistence. All flip from the menu only (no keyboard
+// shortcuts) to prevent accidental mid-play changes.
+const LS_INVINCIBLE = "hellorun2.invincible";
+const LS_MARKERS = "hellorun2.markers";
+const LS_MAP = "hellorun2.map";
+const LS_RIG_EDITOR = "hellorun2.fixtureEditor";
 
 const canvas = document.createElement("canvas");
 // Stable id so Playwright tools can target the game canvas unambiguously.
@@ -146,6 +163,18 @@ const postSettings: PostSettings = {
 setEdgeEmissiveStrength(postSettings.edgeEmissiveStrength);
 const hdr = createHdrPipeline(renderer, scene, camera, postSettings);
 
+// Apply the dev-menu rig-type filter before any corridor is
+// built — otherwise the first few straights would ignore the stored
+// selection. Panel UI is mounted later alongside the menu.
+applyStoredRigFilter();
+
+// Asynchronously overlay any JSON range overrides shipped in
+// public/setup/. Corridor build is deferred until analysis lands
+// (~15s), so the fetch has plenty of time to land first — even if
+// it doesn't, already-built straights will use code-default ranges
+// and new ones after the load will use JSON.
+void loadRigRanges();
+
 void loadPostSettings().then((loaded) => {
   Object.assign(postSettings, {
     edgeEmissiveStrength: loaded.edgeEmissiveStrength,
@@ -192,10 +221,14 @@ interface StraightObj {
   // touching barrier color, and so retroactive recoloring after analysis
   // lands knows which material to mutate.
   readonly tunnelEdgeMaterial: LineMaterial;
-  // Prebuilt `[delineator]` log line fired by the RAF entry detector
-  // on first crossing. Baked at construction since the spec is final
-  // once analysis has landed (corridor build is deferred until then).
-  readonly delineatorLog: string;
+  // Prebuilt `[rig]` log line fired by the RAF entry detector
+  // on first crossing. Mutable because the editor's Generate button
+  // can replace the straight's rigs at runtime.
+  rigLog: string;
+  // Currently-attached rig — its fixtures for this straight. Mutable
+  // for the same reason — editor regeneration swaps the array in
+  // place along with the scene-graph children and registry entries.
+  rig: Fixture[];
 }
 
 const sections: Section[] = [];
@@ -216,12 +249,11 @@ const seedParam = urlParams.get("seed");
 const chartRand =
   seedParam !== null ? mulberry32(parseInt(seedParam, 10) || 0) : Math.random;
 
-// Developer-mode flag. Gates the keyboard shortcuts for pause (Space),
-// marker toggle (B) and debug overlay (M) — these are playtest / debug
-// tools, not gameplay. Invincibility is a Settings-tab toggle (no
-// keyboard shortcut, to avoid accidental mid-play toggles). Always on
-// in dev builds; in a
-// production build, opt in with `?dev` in the URL.
+// Developer-mode flag. Gates the Space pause shortcut and the
+// data-dev-only menu tabs (post, setup, debug). Beat markers, map
+// overlay, and invincibility all live as persistent menu toggles —
+// no keyboard shortcuts to avoid accidental mid-play changes.
+// Always on in dev builds; in a production build opt in via `?dev`.
 const devMode = import.meta.env.DEV || urlParams.has("dev");
 
 const COLOR_STRAIGHT_BOX = 0xffff00;
@@ -237,14 +269,14 @@ const CUBE_EDGES = new THREE.EdgesGeometry(
   40,
 );
 
-// Returns the StraightObj minus delineatorLog — the caller
-// (appendSection) attaches that field after deriving the spec.
+// Returns the StraightObj minus rig fields — the caller
+// (appendSection) attaches those after deriving the spec.
 function buildStraightObj(
   openSlots: readonly number[],
   beats: readonly number[],
   name: string,
   edgeColor: number,
-): Omit<StraightObj, "delineatorLog"> {
+): Omit<StraightObj, "rigLog" | "rig"> {
   const tunnel = createTunnel();
   // setHdrEdgeColor re-remembers the base hex + re-applies the current
   // emissive strength. Survives Post-panel live edits.
@@ -384,38 +416,80 @@ function appendSection(section: Section): void {
     `straight-${idx}`,
     edgeColorForSection(audioSec),
   );
-  // specForDelineators picks 1-3 independent types from the catalog;
-  // createDelineatorsFromSpec builds each one's mesh with the shared
+  // specForRig picks 1-3 independent types from the catalog;
+  // buildRig builds each one's mesh with the shared
   // section color. Deterministic from (kind, startBeat, phraseIndex)
   // — same song replays place the same lights.
   const phraseIndex = Math.floor(section.pathStart / PHRASE_LENGTH);
-  const delineatorSpec = specForDelineators(
+  const rigSpec = specForRig(
     audioSec?.kind ?? null,
     audioSec?.startBeat ?? 0,
     phraseIndex,
   );
   const colorHex = colorForKind(audioSec?.kind ?? null);
-  const delineators = createDelineatorsFromSpec(delineatorSpec, colorHex);
-  for (const set of delineators) {
+  const rigs = buildRig(rigSpec, colorHex);
+  for (const set of rigs) {
     obj.group.add(set.object);
-    registerDelineatorSet(set);
+    registerFixture(set);
   }
   // Prebuilt log line. Fires from the RAF entry detector on corridor
   // crossing. `summary` is a joined per-type description ("cateye[…]
   // + other[…]"). One log per corridor regardless of how many types
   // the spec picked.
-  const delineatorLog =
-    `[delineator] straight=${idx} kind=${audioSec?.kind ?? "—"} ` +
+  const rigLog =
+    `[rig] straight=${idx} kind=${audioSec?.kind ?? "—"} ` +
     `phrase=${phraseIndex} ` +
     `color=#${colorHex.toString(16).padStart(6, "0")} | ` +
-    delineatorSpec.summary;
-  const objWithLog: StraightObj = { ...obj, delineatorLog };
+    rigSpec.summary;
+  const objWithLog: StraightObj = {
+    ...obj,
+    rigLog,
+    rig: [...rigs],
+  };
   objWithLog.group.position.copy(section.position);
   objWithLog.group.rotation.y = section.yaw;
   scene.add(objWithLog.group);
   objWithLog.group.updateMatrixWorld(true);
   straightObjects.push(objWithLog);
   if (debugView) registerStraightDebugHelpers(objWithLog);
+}
+
+// Editor-triggered regeneration. Walks every built straight, drops
+// its current rig — its fixtures (scene graph + registry + GPU), and
+// attaches exactly one fresh random set of the named type. Isolates
+// the type under edit — any other types previously attached are
+// removed so the viewport shows purely what the user's tuning.
+function regenerateAllRigs(typeName: string): void {
+  for (let i = 0; i < straightObjects.length; i++) {
+    const obj = straightObjects[i];
+    const sec = sections[i];
+    if (!obj || !sec || sec.kind !== "straight") continue;
+
+    // Tear down existing sets — scene graph, registry, GPU.
+    for (const set of obj.rig) {
+      obj.group.remove(set.object);
+      unregisterFixture(set);
+      disposeFixture(set);
+    }
+
+    // Build a single fresh set of the requested type. Color stays
+    // tied to the section palette.
+    const audioSec = audioSectionForPathS(sec.pathStart);
+    const colorHex = colorForKind(audioSec?.kind ?? null);
+    const spec = randomSingleSpec(typeName);
+    const next = buildRig(spec, colorHex);
+    for (const set of next) {
+      obj.group.add(set.object);
+      registerFixture(set);
+    }
+    obj.rig = [...next];
+    obj.rigLog =
+      `[rig] straight=${i} (editor:${typeName}) ` +
+      `color=#${colorHex.toString(16).padStart(6, "0")} | ` +
+      spec.summary;
+  }
+  // Reset entry tracking so the next crossing re-logs the new spec.
+  currentStraightIdx = -1;
 }
 
 // Walk every already-built straight and re-set its tunnel edge color from
@@ -435,7 +509,7 @@ function recolorStraightsFromAnalysis(): void {
   }
 }
 
-// Rebuild the delineator set for every already-built straight using
+// Rebuild the rig set for every already-built straight using
 // the now-known audio kind. Without this, boot-lookahead straights
 // (built at kind=null) keep their null-kind shape/layout/density/pulse
 // forever, producing a visible layout flip on the first post-analysis
@@ -458,7 +532,7 @@ function commitAnalysisUpdate(
     0,
   );
   // First-time build: corridor geometry waits for analysis so every
-  // straight (and its delineators) is created with the correct kind.
+  // straight (and its rigs) is created with the correct kind.
   // Guarded so re-entry from editor-save / beat-sync doesn't double up
   // — those paths either leave the existing corridor in place or tear
   // it down and rebuild from their own flow.
@@ -553,7 +627,7 @@ let nextPeriodIdx = 1;
 // All musical-structure markers (beat/bar/phrase/period) are toggleable
 // with B and start disabled. They're a debug/playtest aid — the gate
 // cadence already tells the player what the beat is — so they're opt-in.
-let markersVisible = false;
+let markersVisible = localStorage.getItem(LS_MARKERS) === "true";
 const markers: THREE.Object3D[] = [];
 
 function placeMarkersUpTo(maxPathS: number): void {
@@ -614,6 +688,9 @@ const player = new PlayerController(canvas);
 // static-only visual and have been dropped — they would need re-merging
 // every time a new section is generated and weren't worth the complexity.
 const debugView = new DebugView(scene, canvas, [], { enabled: devMode });
+// Apply stored map-overlay state so it's visible on boot if the
+// toggle was left on last session.
+if (localStorage.getItem(LS_MAP) === "true") debugView.setActive(true);
 
 // Audio-derived state must be declared before the first ensureSectionsAhead
 // call below, because appendSection's audioSectionForPathS lookup reads
@@ -644,7 +721,7 @@ const waveform = new WaveformOverlay({ onSeek: seekToWaveformClick });
 let dead = false;
 let pathS = 0;
 let motionScale = 1;
-let invincible = false;
+let invincible = localStorage.getItem(LS_INVINCIBLE) === "true";
 // Game-over rewind/vinyl state. While `dead`, the death branch in the
 // animation loop integrates `deathRewindSpeed` into pathS (eases toward
 // DEATH_REWIND_DRIFT_SPEED) and ramps `audioSource.playbackRate` down
@@ -1206,6 +1283,8 @@ if (!devMode) {
 } else {
   const postPanelRoot = document.getElementById("post-panel-root");
   if (postPanelRoot) mountPostPanel(postPanelRoot, postSettings, hdr);
+  const rigRoot = document.getElementById("dev-fixture-toggles");
+  if (rigRoot) mountRigDevPanel(rigRoot);
 }
 
 // About pane shows package.json version, injected at build time via
@@ -1217,13 +1296,84 @@ if (aboutVersion) aboutVersion.textContent = `v${__APP_VERSION__}`;
 // can flip it without a keyboard shortcut. aria-pressed is the source
 // of truth: CSS reads it for the [x]/[ ] prefix, so one attribute
 // update keeps visual + a11y in sync.
+// Menu-driven toggles — reflect stored state in the buttons on mount
+// (so the [x]/[ ] prefix is correct on first paint) and persist on
+// change. Toggle buttons use aria-pressed as the source of truth for
+// both visual state (CSS reads it) and a11y.
 const invincibleToggle = document.getElementById("toggle-invincible");
+invincibleToggle?.setAttribute(
+  "aria-pressed",
+  invincible ? "true" : "false",
+);
 invincibleToggle?.addEventListener("click", () => {
   invincible = !invincible;
   invincibleToggle.setAttribute(
     "aria-pressed",
     invincible ? "true" : "false",
   );
+  if (invincible) localStorage.setItem(LS_INVINCIBLE, "true");
+  else localStorage.removeItem(LS_INVINCIBLE);
+});
+
+const markersToggle = document.getElementById("toggle-markers");
+markersToggle?.setAttribute(
+  "aria-pressed",
+  markersVisible ? "true" : "false",
+);
+markersToggle?.addEventListener("click", () => {
+  toggleMarkers();
+  markersToggle.setAttribute(
+    "aria-pressed",
+    markersVisible ? "true" : "false",
+  );
+  if (markersVisible) localStorage.setItem(LS_MARKERS, "true");
+  else localStorage.removeItem(LS_MARKERS);
+});
+
+const mapToggle = document.getElementById("toggle-debug-map");
+mapToggle?.setAttribute(
+  "aria-pressed",
+  debugView.isActive ? "true" : "false",
+);
+mapToggle?.addEventListener("click", () => {
+  const next = !debugView.isActive;
+  debugView.setActive(next);
+  mapToggle.setAttribute("aria-pressed", next ? "true" : "false");
+  if (next) localStorage.setItem(LS_MAP, "true");
+  else localStorage.removeItem(LS_MAP);
+});
+
+// Rig editor: the toggle shows/hides a side-docked panel.
+// Mount lazily on first open; stays mounted so re-opening is instant
+// (in-memory edits survive close/reopen, only reload clears them).
+const editorToggle = document.getElementById("toggle-fixture-editor");
+const editorPanelEl = document.getElementById("fixture-editor-panel");
+let editorMounted = false;
+const editorInitiallyOn =
+  localStorage.getItem(LS_RIG_EDITOR) === "true";
+const setEditorVisible = (visible: boolean): void => {
+  if (!editorPanelEl) return;
+  if (visible) {
+    if (!editorMounted) {
+      mountRigEditor(editorPanelEl, {
+        onGenerate: regenerateAllRigs,
+      });
+      editorMounted = true;
+    }
+    editorPanelEl.classList.remove("hidden");
+  } else {
+    editorPanelEl.classList.add("hidden");
+  }
+  editorToggle?.setAttribute("aria-pressed", visible ? "true" : "false");
+};
+if (editorInitiallyOn) setEditorVisible(true);
+else editorToggle?.setAttribute("aria-pressed", "false");
+editorToggle?.addEventListener("click", () => {
+  const next =
+    editorToggle.getAttribute("aria-pressed") !== "true";
+  setEditorVisible(next);
+  if (next) localStorage.setItem(LS_RIG_EDITOR, "true");
+  else localStorage.removeItem(LS_RIG_EDITOR);
 });
 // True only if the menu is the reason the game is paused — so closing
 // the menu knows to unpause, but explicitly user-paused games (Space)
@@ -1818,7 +1968,7 @@ renderer.setAnimationLoop(() => {
   debugView.updatePlayerBox(camera.position);
   waveform.draw(getSongTimeSec());
 
-  // Entry-time delineator log. Walk sections[] to find the straight
+  // Entry-time rig log. Walk sections[] to find the straight
   // that currently contains pathS; fire the prebuilt log line once
   // per enter. Turns return -1 and leave currentStraightIdx untouched,
   // so the next straight's entry is still a change event.
@@ -1832,13 +1982,13 @@ renderer.setAnimationLoop(() => {
       if (i !== currentStraightIdx) {
         currentStraightIdx = i;
         const obj = straightObjects[i];
-        if (obj) console.log(obj.delineatorLog);
+        if (obj) console.log(obj.rigLog);
       }
       break;
     }
   }
 
-  // Beat-synced delineator pulses. pathS-based so they lock to the
+  // Beat-synced rig pulses. pathS-based so they lock to the
   // corridor's visual beat (which equals audio beats, since
   // currentForwardSpeed is BPM-derived). Phases are independent windows
   // for pulse patterns that care about bar/phrase granularity.
@@ -1846,7 +1996,7 @@ renderer.setAnimationLoop(() => {
     const beatPhase = (pathS % BEAT_LENGTH) / BEAT_LENGTH;
     const barPhase = (pathS % BAR_LENGTH) / BAR_LENGTH;
     const phrasePhase = (pathS % PHRASE_LENGTH) / PHRASE_LENGTH;
-    updateDelineatorPulses(beatPhase, barPhase, phrasePhase);
+    updateFixturePulses(beatPhase, barPhase, phrasePhase);
   }
 
   // Main render: full-viewport HDR game view via the composer. The
@@ -1883,15 +2033,12 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     toggleUserMenu();
   }
-  // Dev-only: Space pause, B marker toggle.
-  // M (debug overlay) is gated inside DebugView via its `enabled` option.
-  // Invincibility lives in the Settings menu (always available) — no
-  // keyboard shortcut to avoid accidental toggles during play.
+  // Dev-only: Space pause. Marker and map toggles live in the Debug
+  // menu (along with invincibility in Settings) — no keyboard
+  // shortcuts, to avoid accidental mid-play toggles.
   else if (devMode && e.code === "Space") {
     e.preventDefault(); // don't scroll the page
     togglePause();
-  } else if (devMode && e.code === "KeyB") {
-    toggleMarkers();
   }
 });
 
@@ -1936,7 +2083,7 @@ function syncFromCurrentMoment(): void {
   prevEndSlot = null;
   turnsBuilt = 0;
   edgeMaterials.length = 0;
-  clearDelineatorRegistry();
+  clearFixtureRegistry();
   currentStraightIdx = -1;
 
   for (const m of markers) scene.remove(m);

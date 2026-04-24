@@ -472,7 +472,8 @@
       /* Direct-child only — nested controls (like .track-delete inside
          a list row) need their own sizing and shouldn't inherit the
          100%-wide placeholder action-button style. */
-      .user-pane > button {
+      .user-pane > button,
+      .post-panel > button {
         display: block;
         width: 100%;
         margin: 0.5rem 0;
@@ -486,7 +487,8 @@
         cursor: pointer;
         transition: background 0.15s, border-color 0.15s;
       }
-      .user-pane > button:hover {
+      .user-pane > button:hover,
+      .post-panel > button:hover {
         background: rgba(255, 255, 255, 0.12);
         border-color: rgba(255, 255, 255, 1);
       }
@@ -529,6 +531,210 @@
         font-size: 0.875rem;
         opacity: 0.6;
         letter-spacing: 0.08em;
+      }
+      /* Dev rig editor — side-docked panel that opens when the
+         Debug-tab toggle is on. Stays open while the game plays
+         behind it; pointer events only captured inside the panel. */
+      #fixture-editor-panel {
+        position: fixed;
+        top: 1rem;
+        right: 1rem;
+        bottom: 1rem;
+        width: 22rem;
+        max-height: calc(100vh - 2rem);
+        overflow-y: auto;
+        background: rgba(0, 0, 0, 0.88);
+        border: 1px dashed rgba(255, 255, 255, 0.55);
+        color: #ffffff;
+        font-family: "M PLUS 1", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-size: 0.8rem;
+        z-index: 30;
+        padding: 1rem 1.25rem;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      #fixture-editor-panel.hidden { display: none; }
+      .fixture-editor-header {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        opacity: 0.85;
+        padding-bottom: 0.3rem;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.35);
+      }
+      .fixture-editor-selector {
+        display: grid;
+        grid-template-columns: 4rem 1fr;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .fixture-editor-selector label {
+        opacity: 0.7;
+        font-size: 0.75rem;
+      }
+      .fixture-editor-selector select {
+        background: #0a0a0a;
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        font: inherit;
+        font-size: 0.75rem;
+        padding: 0.2rem 0.4rem;
+        text-transform: none;
+      }
+      .fixture-editor-selector select:focus {
+        outline: none;
+        border-color: rgba(255, 255, 255, 0.85);
+      }
+      .fixture-editor-body {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        padding-top: 0.25rem;
+      }
+      .fixture-editor-empty {
+        opacity: 0.5;
+        font-size: 0.75rem;
+        font-style: italic;
+      }
+      .fixture-editor-row {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+      }
+      .fixture-editor-row > label {
+        font-size: 0.7rem;
+        opacity: 0.7;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .fixture-editor-minmax {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+      }
+      .fixture-editor-stepper {
+        display: grid;
+        grid-template-columns: 2.2rem 1fr;
+        align-items: center;
+        gap: 0.4rem;
+      }
+      .fixture-editor-stepper-label {
+        font-size: 0.65rem;
+        opacity: 0.5;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .fixture-editor-stepper-group {
+        display: flex;
+        align-items: stretch;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+      }
+      .fixture-editor-stepper-group:focus-within {
+        border-color: rgba(255, 255, 255, 0.85);
+      }
+      .fixture-editor-stepper-group input[type="number"] {
+        flex: 1;
+        min-width: 0;
+        background: transparent;
+        color: #ffffff;
+        border: 0;
+        font: inherit;
+        font-size: 0.75rem;
+        padding: 0.2rem 0.4rem;
+        text-align: left;
+        -moz-appearance: textfield;
+      }
+      .fixture-editor-stepper-group input::-webkit-inner-spin-button,
+      .fixture-editor-stepper-group input::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      .fixture-editor-step {
+        background: transparent;
+        color: #ffffff;
+        border: 0;
+        cursor: pointer;
+        padding: 0 0.35rem;
+        font: inherit;
+        font-size: 0.75rem;
+        opacity: 0.5;
+      }
+      .fixture-editor-step:hover { opacity: 1; }
+      .fixture-editor-step:first-of-type { padding-right: 0.1rem; }
+      .fixture-editor-step + .fixture-editor-step { padding-left: 0.1rem; }
+      .fixture-editor-actions {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: auto;
+        padding-top: 0.75rem;
+        border-top: 1px dashed rgba(255, 255, 255, 0.35);
+      }
+      .fixture-editor-actions button {
+        flex: 1;
+        background: transparent;
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.55);
+        font: inherit;
+        font-size: 0.75rem;
+        padding: 0.4rem 0.6rem;
+        cursor: pointer;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        transition: background 0.12s, border-color 0.12s;
+      }
+      .fixture-editor-actions button:hover {
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 1);
+      }
+      /* Dev-tab rig-type toggles. Checkbox list; "all" row sits
+         above the per-type rows, which dim via :disabled when "all" is
+         on. */
+      .fixture-toggle-panel {
+        margin-top: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+        font-size: 0.8rem;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .fixture-toggle-title {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        opacity: 0.65;
+        padding-bottom: 0.15rem;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.3);
+      }
+      .fixture-toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        cursor: pointer;
+        padding: 0.15rem 0;
+      }
+      .fixture-toggle-row input[type="checkbox"] {
+        margin: 0;
+        accent-color: #ffffff;
+        cursor: pointer;
+      }
+      .fixture-toggle-row:has(input:disabled) {
+        opacity: 0.4;
+        cursor: default;
+      }
+      .fixture-toggle-row:has(input:disabled) input {
+        cursor: default;
+      }
+      .fixture-toggle-all {
+        font-weight: 500;
+      }
+      .fixture-toggle-list {
+        display: flex;
+        flex-direction: column;
+        padding-left: 0.85rem;
+        gap: 0.15rem;
       }
       /* Post panel: dense list of numeric rows + a small button row at
          the bottom. Scrolls within the pane when the full list
@@ -750,7 +956,8 @@
           <button class="user-tab active" type="button" data-tab="settings">settings</button>
           <button class="user-tab" type="button" data-tab="music">music</button>
           <button class="user-tab" type="button" data-tab="post" data-dev-only>post</button>
-          <button class="user-tab" type="button" data-tab="dev" data-dev-only>dev</button>
+          <button class="user-tab" type="button" data-tab="setup" data-dev-only>setup</button>
+          <button class="user-tab" type="button" data-tab="debug" data-dev-only>debug</button>
           <button class="user-tab" type="button" data-tab="about">about</button>
         </nav>
         <div class="user-panes">
@@ -777,9 +984,42 @@
           <section class="user-pane" data-pane="post" data-dev-only>
             <div id="post-panel-root"></div>
           </section>
-          <section class="user-pane" data-pane="dev" data-dev-only>
-            <button id="dev-export-analysis" type="button">export analysis sidecar</button>
-            <button id="dev-clear-cache" type="button">clear track analysis</button>
+          <section class="user-pane" data-pane="setup" data-dev-only>
+            <div id="dev-fixture-toggles"></div>
+          </section>
+          <section class="user-pane" data-pane="debug" data-dev-only>
+            <div class="post-panel">
+              <div class="post-section-header">view</div>
+              <div class="post-row">
+                <label for="toggle-markers">beat markers</label>
+                <button
+                  id="toggle-markers"
+                  type="button"
+                  class="settings-toggle"
+                  aria-pressed="false"
+                ></button>
+              </div>
+              <div class="post-row">
+                <label for="toggle-debug-map">map</label>
+                <button
+                  id="toggle-debug-map"
+                  type="button"
+                  class="settings-toggle"
+                  aria-pressed="false"
+                ></button>
+              </div>
+              <div class="post-section-header">debug</div>
+              <button
+                id="toggle-fixture-editor"
+                type="button"
+                class="toggle-btn"
+                aria-pressed="false"
+              >
+                rig editor
+              </button>
+              <button id="dev-export-analysis" type="button">export analysis sidecar</button>
+              <button id="dev-clear-cache" type="button">clear track analysis</button>
+            </div>
           </section>
           <section class="user-pane" data-pane="about">
             <div class="about-panel">
@@ -790,6 +1030,7 @@
         </div>
       </div>
     </div>
+    <aside id="fixture-editor-panel" class="hidden"></aside>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

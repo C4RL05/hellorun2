@@ -64,7 +64,7 @@ export const COLOR_FACE = 0x0a1420;
 export const COLOR_EDGE = 0x00aaff;
 
 // Per-section color palette lives in src/section-palette.ts — it's
-// shared across edges, delineators, and any future element that keys
+// shared across edges, rigs, and any future element that keys
 // off section kind. Keeping it out of this file so "feel-spec
 // constants" stays about game-feel numbers, not visual theming.
 

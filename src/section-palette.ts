@@ -1,6 +1,6 @@
 // Per-audio-section color. Shared across every visual element that
 // needs to key off the current section's identity — tunnel edges,
-// delineators, and anything added later (gate fill tints? marker
+// rigs, and anything added later (gate fill tints? marker
 // accents?). Centralizing here keeps the look coherent: when one
 // kind's color changes here, every element that consumes it shifts
 // together.
@@ -15,7 +15,7 @@
 // saturation keeps the tunnel readable between flashes. Chosen to
 // stay inside the Tron-Recognizer aesthetic (plan §5) — no neutrals,
 // no muddy earth tones. Violet sits near the bloom threshold at
-// DELINEATOR_PULSE_PEAK by design: it's the one "quiet" hue so
+// FIXTURE_PULSE_PEAK by design: it's the one "quiet" hue so
 // violet-kind straights feel softer than coral/amber ones.
 
 export const SECTION_PALETTE: readonly number[] = [

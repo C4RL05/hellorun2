@@ -1,68 +1,110 @@
-# Next session — HDR pipeline (M10 kickoff)
+# Next session — refine the rig editor
 
-We're continuing **HelloRun 2**, a first-person rhythm runner for the Cerebral Valley "Built with Opus 4.7: Claude Code" hackathon. **Submission is Mon 2026-04-27 at 01:00 BST** (Sun 20:00 EDT). Today is 2026-04-25 morning when this resumes — **two days to ship**.
+We're continuing **HelloRun 2**, a first-person rhythm runner for the Cerebral Valley "Built with Opus 4.7: Claude Code" hackathon. **Submission is Mon 2026-04-27 at 01:00 BST** (Sun 20:00 EDT). Today is 2026-04-26 morning when this resumes — **~1.5 days to ship**.
 
 **Read these first** (in order):
-1. `CLAUDE.md` — project overview + auto-mode working style
-2. `docs/hellorun2-plan.md` §5 (visuals) + §6 (rendering) — the aesthetic this session is finally going to deliver
-3. `docs/architecture.md` — current render pipeline (two-pass: main game + debug-overlay layer 1)
-4. `docs/milestone-status.md` M10 — the full polish checklist; HDR is the gate that unlocks most of it
+1. `CLAUDE.md` — project overview + auto-mode working style.
+2. `docs/hellorun2-plan.md` §5 (visuals) — aesthetic contract; rigs exist to deliver the "road-like emissive markers" line.
+3. `docs/milestone-status.md` — where M10 stands; rig system is mostly there.
 
 ## Where we are
 
-M1–M9 done. Gameplay is locked: BYOM analysis, per-section density tiers with sweep atoms + per-chorus ramp, corridor rolling/rebuild, beat-sync (RMB mid-play), white UI chrome with M PLUS 1 logo, menu (Tab) auto-pauses and hides all other UI. Last commit: `2274410` white-UI + menu work.
+M1–M9 done. M10 substantial progress:
+- **HDR pipeline shipped**: pmndrs `EffectComposer` (HalfFloatType) → Bloom → Exposure → ACES tone map. Dev-only Post tab in the menu tunes live; exports a `public/post-settings.json`. See `src/render-pipeline.ts`, `src/post-panel.ts`, `src/post-settings.ts`.
+- **Rig system shipped** (catalog of per-straight emissive markers). Details below.
+- **Rig editor MVP shipped** (side-docked dev panel for tuning rig fixture params).
+- **Menu structure**: `settings` (invincibility) · `music` (tracks) · `post` (dev) · `setup` (dev, fixture enable toggles) · `debug` (dev, view flags + rig editor + data buttons) · `about` (logo + v__APP_VERSION__).
 
-Renderer is vanilla. `WebGLRenderer` with SDR output, no post-processing, no bloom, no tone-mapping. Faces are `MeshLambertMaterial`, edges are fat-line `LineSegments2` with `LineMaterial`. Colors are just `color.setHex(...)` on linear RGB.
+Last commit before this session: `a79626b` (cateye → InstancedMesh). Several commits on top — rename to "rig/fixture" (option A), rig editor MVP, debug-tab section headers. Not yet committed when this prompt was written; the user asked for a commit right before starting this file.
 
-## What "HDR pipeline" means here
+## The rig system — option A vocabulary
 
-Plan §5 is explicit: **"`EffectComposer` with layer-selective `UnrealBloomPass`. Fills stay crisp, edges halo."** That's the headline. Minimum viable HDR pipeline:
+Each straight has one **rig** — a collection of 1–3 **fixtures** picked from the catalog. Mental model: stage rigging. The rig is the whole lighting assembly on that straight; the fixtures are the individual units (cateyes, spikes, etc.) mounted on it.
 
-1. **Half-float render target** (`WebGLRenderTarget` with `type: THREE.HalfFloatType`) so edge colors can carry emissive values >1.0 without clipping.
-2. **EffectComposer** chain replacing the bare `renderer.render(scene, camera)` call in `main.ts`'s RAF loop:
-   - `RenderPass(scene, camera)` — writes HDR scene
-   - `UnrealBloomPass` configured to only affect bright pixels — `threshold = 1.0`, `strength`/`radius` tuned by feel
-   - `OutputPass` (or manual `renderer.toneMapping = ACESFilmicToneMapping`) to map HDR → sRGB for display
-3. **Edge materials get `emissive` values > 1.0** — probably scale via a new `EDGE_EMISSIVE_STRENGTH` constant so feel-spec discipline holds. Faces stay ≤ 1.0 so they don't bloom.
-4. **Layer routing**: the second render pass (`debugView.camera` on layer 1) must NOT go through the composer — debug helpers shouldn't bloom. Either skip the composer for the debug pass, or move debug to a separate RenderTarget.
+| Concept | Code name | Where |
+|---|---|---|
+| Fixture kind | `FixtureType<Params>` | `src/scene/fixtures/shared.ts` |
+| One built fixture attached to a straight | `Fixture` (extends `BuiltFixture` + `typeName`) | `src/scene/fixtures/index.ts` |
+| Per-straight collection | `rig: Fixture[]` on `StraightObj` | `src/main.ts` |
+| Plan for one rig (what the hash picks) | `RigSpec` | `src/scene/fixtures/index.ts` |
+| Catalog | `CATALOG: ReadonlyArray<FixtureType>` | `src/scene/fixtures/index.ts` |
+| Log tag | `[rig] straight=N … \| cateye[…] + spike[…]` | one line per straight on first camera crossing |
 
-## Current render pipeline touchpoints
+**Catalog today**: `cateye` (cubes/tetras/capsules in 9 layouts, 1/2/4 density — `InstancedMesh`), `spike` (cones scattered on all 4 surfaces, noise-driven length + spawn mask, 100/200/400 density, `InstancedMesh`).
 
-`main.ts` RAF loop (search `renderer.render`):
-```ts
-renderer.clear();
-renderer.render(scene, camera);          // pass 1 — game, layer 0
-if (debugView.isActive) {
-  renderer.clearDepth();
-  renderer.render(scene, debugView.camera); // pass 2 — helpers, layer 1
-}
-```
+**Variation hierarchy**:
+- Kind (audio-section kind) → shape, pulse, color, density
+- Section (audio-section `startBeat`) → layout
+- Phrase block (every 2 phrases = 4 corridors) → sizeScale, rotation
 
-HDR swaps pass 1 for `composer.render(dt)`. Pass 2 stays on the bare renderer and needs `renderer.autoClear = false` to not stomp the composer's output — which it already is. Should be a clean split.
+All picks seeded through `mulberry32` for determinism. Each picked type's seeds are salted by `djb2(type.name)` so two types on the same straight roll independently.
 
-`COLOR_EDGE` in `constants.ts` is currently `0x00aaff`. Under HDR with emissive intensity > 1, this reads as "bright cyan that halos." Don't change the hex — multiply via a new `EDGE_EMISSIVE_STRENGTH` uniform or via `LineMaterial`'s color set to `COLOR_EDGE × strength`.
+**Build timing**: corridor is deferred until analysis lands (~15s boot). No retroactive rebuild. Generate ranges load from `public/setup/<typename>.json` at boot if present; otherwise code defaults.
 
-## Gotchas specific to this project
+## The rig editor — where it is now
 
-- **Transparent barriers** (`barrier.fillMaterial` has `opacity: 0.3, depthWrite: false`) interact poorly with HDR + bloom — the half-float buffer does the right thing numerically but the no-depth-write pass can cause order issues. Test: barrier closer than an edge behind it should not bloom through. If it does, the fix is `transparent: false` on the barrier fill (it'll look fine if you drop the emissive-edge color into the composer and treat barrier red as bloom-target too).
-- **Debug overlay camera** (`layers.set(1)`) uses an orthographic camera with bboxes. Those lines should NOT bloom. Easiest: render debug pass AFTER composer output, bare renderer, layer 1 only. Already the existing structure — just don't route it through the composer.
-- **Device pixel ratio**: `renderer.setPixelRatio(Math.min(devicePixelRatio, 2))` already caps the game canvas. The composer's internal targets need the same cap or bloom gets expensive fast at 4K. `composer.setPixelRatio(...)` and `composer.setSize(w, h)` on window resize.
-- **Tone-mapping interaction**: once `renderer.toneMapping` is set, *all* face colors get tone-mapped too. The "dark fills" become slightly darker. Compensate by bumping base `COLOR_FACE` if needed — or use a dedicated `ToneMappingPass` in the composer chain so the face layer isn't double-affected by the renderer's built-in mapping.
-- **sRGB output**: `renderer.outputColorSpace = THREE.SRGBColorSpace` (three r152+ default). OutputPass handles it automatically. If skipping OutputPass, make sure the swap-chain target is sRGB.
+Located at `src/dev-fixture-editor.ts`, toggled by "rig editor" button in Debug tab (persists under `hellorun2.fixtureEditor` in localStorage). Side-docked panel, right edge, 22rem wide. Game renders behind.
+
+**What works today**:
+- Dropdown of all `FixtureType` names from the catalog.
+- For each numeric param in the selected type's `ranges` record, a min + max stepper pair (stacked vertically inside each param row).
+- **Generate** button → `regenerateAllRigs(typeName)` in `main.ts`: tears down every built straight's rig (scene graph + registry + GPU dispose), attaches ONE fresh fixture of the selected type with random params rolled from the current ranges via `randomSingleSpec`. Isolates the type under edit — other types removed for clean viewing.
+- **Export json** button → downloads `<typename>.json` with the type's current `ranges`. User drops it into `public/setup/` and reloads to bake in.
+- Boot loader: `src/fixture-range-loader.ts` fetches `/setup/<name>.json` per catalog type, merges over code defaults. Tolerant of missing/malformed files.
+
+**Editable today**:
+- `cateye.ts` ranges: `sizeScale`
+- `spike.ts` ranges: `baseLength`, `radiusRatio`, `threshold`, `noiseScale`
+
+**Persistence model**: in-memory edits are ephemeral. Export → drop into `public/setup/` → reload is the checkpoint path. No auto-save. This is the clean separation the user asked for — "ranges are not mixed up with the code itself."
+
+## What to refine — the actual task
+
+The editor is MVP. It works, but most of what makes a rig visually distinct is *still code-driven* and not reachable from the editor. The user values the editor highly ("the better we make the editor more time we save"). Goal this session: make it a real tuning tool.
+
+**Gaps, roughly in order of value per hour**:
+
+1. **Union params aren't editable at all.** `shape`, `layout`, `pulse`, `density` for cateye; `pulse`, `density` for spike. Today they're picked from fixed arrays in the type's `specFor`. The editor can't pin them, can't restrict the pool. Two options:
+   - **Pin to one value**: editor shows a dropdown per union param, selected value always used.
+   - **Restrict the pool**: editor shows a multi-select checkbox list; Generate picks randomly from the remaining checked options.
+   Either one unlocks serious variety. Multi-select is more powerful but more UI; pin is simpler. Recommend: start with multi-select and default to "all checked".
+
+2. **Editor doesn't show what was actually rolled.** After Generate, you see results in-world but can't read the exact params that got picked. Log line helps but is noisy to scroll. A "last rolled" readout next to each param row would let you zero in on a good roll and then narrow the range around it.
+
+3. **Seed lock / reproduce.** "I like THIS specific roll. Let me lock the seed and tweak one range to see how that single param moves without rerolling the others." Needs either: (a) a seed field you can freeze, or (b) a "lock rolled values as new min/max=exact" button that collapses ranges to single values.
+
+4. **Isolated preview corridor.** Generate currently wipes all visible corridors. If you're mid-song and want to compare type A vs type B, you can't — each Generate replaces everything. A dedicated stub straight behind the spawn (or a floating preview frame in the side panel) would let you A/B.
+
+5. **Reset-to-defaults per type.** Currently editor mutates the type's `ranges` record in place. No undo. A "reset" button per type would restore the code-default ranges (would require stashing the original values somewhere — currently lost once the loader overwrites).
+
+6. **Regeneration scope controls.** Today Generate wipes the currently-picked type across all built straights. Might want: "generate for current straight only", "generate for next N straights", "generate and keep all other types".
+
+7. **Copy ranges between types.** Probably not worth it unless types end up sharing a param name (most don't).
+
+8. **Type-specific non-range knobs**. Things like `CONE_RADIAL_SEGMENTS` (4 = pyramid vs 8 = smooth cone) or `BASE_SIZE` for cateye — not really random ranges but do affect the look. Would need an expanded "constants" section per type.
+
+**Probably NOT worth doing**:
+- Saving multiple preset files per type (over-engineering — one JSON per type is plenty).
+- Mid-session hot-reload of JSON (user already has Export → drop → reload as the canonical path).
+- Editing color (color is section-palette driven; changing it per type breaks the tunnel/rig harmony).
 
 ## Suggested implementation order
 
-1. **Scaffold the composer** around current render call. Single `RenderPass` + `OutputPass`, no bloom yet. Verify the game looks identical to today. Any regression here means color-space or pixel-ratio is off.
-2. **Turn on tone-mapping** via `renderer.toneMapping = ACESFilmicToneMapping`. Tune base face color if fills go too dark.
-3. **Add UnrealBloomPass** with threshold = 1.0, strength = 0.6, radius = 0.5. Edges still clip at 1.0 so no visible change yet — confirms the pass is wired correctly.
-4. **Bump edge emissive > 1.0** (new `EDGE_EMISSIVE_STRENGTH = 2.5` or similar in `constants.ts`). Now edges halo. Tune strength/radius by feel.
-5. **Check debug overlay** doesn't bloom. Fix routing if it does.
-6. **Resize handling** — composer.setSize on the existing resize listener.
-7. **Measure FPS** — `performance.now()` at start/end of frame. Plan §6 calls bloom the main per-pixel cost; if 60fps drops on a 1440p display, lower the bloom internal target resolution via `UnrealBloomPass`'s third constructor arg.
+1. **Union param multi-selects** (biggest unlock). Extend `FixtureType` interface with optional `unionParams: Record<string, readonly string[]>`. Each type declares which param names are unions + their options. Editor renders a checkbox list per union param; the type's `specFor` reads from the filtered pool. Tell the user when Generate runs with an empty pool (fall back to full pool, log a warning).
+2. **Last-rolled readout** per param row. Panel subscribes to Generate; each row shows "rolled: 0.24" next to its min/max. Readout goes stale (grey out) if the user edits the range.
+3. **Seed lock** — one field at the top of the editor, editable integer. When set, `randomSingleSpec` uses those seeds instead of Math.random; Generate produces the same roll every click until the user changes the seed or clears it.
+4. **Isolated preview corridor** — stash a dedicated `StraightObj` at pathS = -40 or similar (behind spawn) and aim a stub camera at it from the panel. Too much scope for 1.5 days; skip unless time permits.
+5. **Reset-to-defaults** — capture each type's initial `ranges` at module load (deep copy) and expose via `resetToDefaults(typeName)`. Cheap.
 
-## What stays deferred for this session
+## Gotchas / invariants — don't regress
 
-M10 also lists beat pulse, wave effect, corridor pruning, title/end screens polish. **Do HDR + bloom first** — beat pulse is a 15-min addition once emissive values can exceed 1.0 (just modulate `EDGE_EMISSIVE_STRENGTH` per frame from a beat-phase LFO), and is much more dramatic with bloom than without. Corridor pruning is correctness/memory work that can hide behind any performance issue bloom introduces. Title/end screens polish only matters if HDR makes the logo read differently.
+- **`public/setup/`** is the JSON dir for fixture ranges (and the Setup tab's enable toggles). Log tag stays `[rig]`.
+- **`hellorun2.fixtures.enabled`**, **`hellorun2.fixtureEditor`**, **`hellorun2.markers`**, **`hellorun2.map`**, **`hellorun2.invincible`** — don't rename; existing users' state lives there.
+- **Corridor build is gated on analysis landing.** No retroactive rebuild path. If the editor needs to affect already-built straights, use `regenerateAllRigs` (ephemeral, non-deterministic) rather than re-entering the build path.
+- **Determinism invariant**: during normal (non-editor) play, `specForRig(kind, sectionKey, phraseIndex)` is deterministic. The editor's Generate bypasses this on purpose (uses `Math.random`). Don't leak editor-driven randomness into the production build path.
+- **`Fixture` in code = one built+attached unit**. Multiple of these per straight. Don't use it as the type name — `FixtureType` is the type.
+- **Fixtures use `InstancedMesh`**. Pulse updates drive shared material color (not per-instance). Per-instance pulse is a one-liner (`setColorAt`) if needed — haven't shipped it.
+- **No gate changes**. The rig system is purely visual; gates remain baked, deterministic, chart-driven. Don't accidentally wire rigs into collision or chart.
 
 ## Workflow rules (carried over)
 
@@ -70,11 +112,14 @@ M10 also lists beat pulse, wave effect, corridor pruning, title/end screens poli
 - **No `git commit`** unless Carlos explicitly says so. Never push.
 - **No mp3 commits** ever.
 - **Tracks not songs** in user-facing copy and new identifiers.
-- **Release pointer lock before any UI overlay appears** (already wired; remember for any new state transitions).
-- **Feel-spec discipline**: bloom strength/radius, edge emissive strength, tone-mapping exposure all go in `src/constants.ts`.
+- **Release pointer lock before any UI overlay appears**.
+- **Feel-spec discipline**: any new tunable defaults go in `src/constants.ts`. Editable ranges go in the type's `ranges` record.
 - Kill stale dev servers with `npx kill-port 5173 5174 5175`.
-- `tools/` Playwright scripts now target `#game-canvas` — if you add another canvas to the DOM for post-processing (shouldn't need to — composer reuses the WebGL canvas), keep that id stable.
+- Playwright scripts target `#game-canvas`.
+- Timestamps for commits: user writes `commit with timestamp +Nh`. Compute via `date -d "+N hours" -Iseconds` and set both `GIT_AUTHOR_DATE` and `GIT_COMMITTER_DATE`.
 
 ## Honest scope note
 
-HDR pipeline is a 2–4 hour job if the scaffolding-first approach goes clean, 8+ hours if color-space issues chase you. We have ~two days. Once bloom is landing correctly, the ROI on further polish (beat pulse, wave effect, screens) is huge per hour spent. Don't chase bloom perfection — "obviously glowing edges, hits 60fps on desktop" is the bar.
+1.5 days to ship. Union param multi-selects + last-rolled readout covers ~80% of the tuning value and is ~3-4 hours of clean work. Seed lock and reset-to-defaults are each ~30min. Isolated preview corridor is a rabbit hole — skip unless the above three fly.
+
+Most important: keep the fixture modules self-contained. Any editor feature that requires a new contract on `FixtureType` goes into `shared.ts`, and each type either opts in (union params declaration) or doesn't. A type added to the catalog next session (arches, runway lines, pylons?) should need zero changes outside its own file.

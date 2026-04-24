@@ -86,7 +86,6 @@ export class DebugView {
     playerHelper.layers.set(HELPER_LAYER);
     this.helpers.add(playerHelper);
 
-    window.addEventListener("keydown", this.onKeyDown);
     canvas.addEventListener("wheel", this.onWheel, { passive: false });
     canvas.addEventListener("mousedown", this.onMouseDown);
     canvas.addEventListener("mouseup", this.onMouseUp);
@@ -96,6 +95,14 @@ export class DebugView {
 
   get isActive(): boolean {
     return this.active;
+  }
+
+  // External toggle — wired from the Debug tab in the menu. `enabled`
+  // still gates whether the overlay is available at all (dev builds
+  // only); flipping active on a disabled DebugView is a no-op.
+  setActive(value: boolean): void {
+    if (!this.enabled) return;
+    this.active = value;
   }
 
   get camera(): THREE.OrthographicCamera {
@@ -125,13 +132,6 @@ export class DebugView {
       pos.z + PLAYER_BBOX_HALF,
     );
   }
-
-  private onKeyDown = (e: KeyboardEvent) => {
-    if (!this.enabled) return;
-    if (e.code === "KeyM") {
-      this.active = !this.active;
-    }
-  };
 
   private onWheel = (e: WheelEvent) => {
     if (!this.active) return;
