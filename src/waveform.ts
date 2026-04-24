@@ -46,6 +46,7 @@ export class WaveformOverlay {
   constructor(options: WaveformOptions = {}) {
     this.onSeek = options.onSeek ?? null;
     this.canvas = document.createElement("canvas");
+    this.canvas.id = "waveform-overlay";
     this.canvas.style.position = "fixed";
     this.canvas.style.top = "0";
     this.canvas.style.left = "0";

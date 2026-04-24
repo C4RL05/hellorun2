@@ -1012,10 +1012,12 @@ function startGame(): void {
 // just flips the `paused` flag; the animation loop's `!paused` guard
 // freezes pathS in wall-clock fallback mode too.
 function togglePause(): void {
-  if (!running || dead) return;
+  if (!running) return;
   if (paused) {
     paused = false;
-    if (pauseHadAudio && audioCtx && audioBuffer) {
+    // Don't restart audio mid-game-over — the vinyl ramp was already
+    // pulling it toward silence; unpause just resumes the frozen rewind.
+    if (!dead && pauseHadAudio && audioCtx && audioBuffer) {
       audioSource = audioCtx.createBufferSource();
       audioSource.buffer = audioBuffer;
       audioSource.connect(audioCtx.destination);
@@ -1080,8 +1082,26 @@ if (!devMode) {
     ?.querySelectorAll<HTMLElement>("[data-dev-only]")
     .forEach((el) => el.remove());
 }
+// True only if the menu is the reason the game is paused — so closing
+// the menu knows to unpause, but explicitly user-paused games (Space)
+// don't get force-resumed on menu close.
+let pausedByMenu = false;
 function toggleUserMenu(): void {
   userMenu?.classList.toggle("hidden");
+  const open = userMenuOpen();
+  // body.menu-open drives CSS that hides the waveform + title screen.
+  document.body.classList.toggle("menu-open", open);
+
+  if (open) {
+    if (running && !paused) {
+      togglePause();
+      pausedByMenu = true;
+    }
+  } else {
+    // `&& paused` covers the case where user unpaused mid-menu via Space.
+    if (pausedByMenu && paused) togglePause();
+    pausedByMenu = false;
+  }
 }
 function userMenuOpen(): boolean {
   return userMenu !== null && !userMenu.classList.contains("hidden");
@@ -1295,8 +1315,7 @@ async function openEditorForTrack(hash: string): Promise<void> {
   // Force pause so the game stops advancing while the user edits. We
   // don't restore the prior state on close — the user can resume on
   // their own (Space) once they're done editing.
-  if (running && !dead && !paused) togglePause();
-  paused = true; // also catches the dead-during-rewind case
+  if (running && !paused) togglePause();
   player.releasePointerLock();
 
   editor.open({
@@ -1680,6 +1699,14 @@ window.addEventListener("keydown", (e) => {
     if (trackEditor?.isOpen()) trackEditor.closeFromEsc();
     else if (userMenuOpen()) toggleUserMenu();
     else quitToTitle();
+  }
+  // Tab: toggle user menu (opens or closes). Track editor takes
+  // precedence — if the editor modal is open, let the user tab through
+  // its inputs normally.
+  else if (e.code === "Tab") {
+    if (trackEditor?.isOpen()) return;
+    e.preventDefault();
+    toggleUserMenu();
   }
   // Dev-only: Space pause, B marker toggle, I invincibility.
   // M (debug overlay) is gated inside DebugView via its `enabled` option.

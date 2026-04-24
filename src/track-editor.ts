@@ -46,7 +46,7 @@ const DRAG_THRESHOLD_PX = 3;
 // per-beat lines just create visual noise.
 const PHRASE_LINE_COLOR = "rgba(255, 255, 255, 0.7)";
 const PLAYHEAD_COLOR = "rgba(255, 255, 255, 1)";
-const WAVEFORM_COLOR = "rgba(0, 170, 255, 0.55)";
+const WAVEFORM_COLOR = "rgba(255, 255, 255, 0.55)";
 const BEATS_PER_PHRASE = 16;
 
 export class TrackEditor {

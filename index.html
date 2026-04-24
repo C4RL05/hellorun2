@@ -6,9 +6,10 @@
     <title>HelloRun 2</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preload" as="image" href="/images/hellorun2.svg" />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=M+PLUS+1:wght@300;400;500;600&display=swap"
     />
     <style>
       html,
@@ -26,30 +27,45 @@
         inset: 0;
         display: flex;
         flex-direction: column;
-        justify-content: center;
         align-items: center;
+        box-sizing: border-box;
         background: rgba(0, 0, 0, 0.55);
-        color: #00aaff;
-        font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: #ffffff;
+        font-family: "M PLUS 1", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         text-transform: uppercase;
-        letter-spacing: 0;
+        letter-spacing: 0.12em;
         z-index: 10;
         cursor: pointer;
         user-select: none;
       }
-      #title-screen h1 {
-        margin: 0;
-        font-weight: 300;
-        font-size: clamp(2rem, 6vw, 4.5rem);
+      /* flex:1 grows to fill leftover space so logo centers in the
+         viewport; subtitle's own padding-bottom sticks it to the floor. */
+      .title-logo-wrap {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #title-logo {
+        display: block;
+        width: clamp(18rem, 50vw, 40rem);
+        height: auto;
+        /* Logo is a static element behind the interactive drop-zone /
+           subtitle — don't eat click events that belong to the title
+           overlay's click-to-start handler. */
+        pointer-events: none;
+        -webkit-user-drag: none;
+        user-select: none;
       }
       #title-screen .subtitle {
-        margin-top: 1.5rem;
+        margin: 0;
+        padding-bottom: clamp(2rem, 6vh, 5rem);
         opacity: 0.65;
-        font-size: clamp(0.75rem, 1.4vw, 1rem);
+        font-size: clamp(0.875rem, 1.7vw, 1.25rem);
       }
       #drop-zone {
         padding: 1rem 2.25rem;
-        border: 1px dashed rgba(0, 170, 255, 0.55);
+        border: 1px dashed rgba(255, 255, 255, 0.55);
         border-radius: 2px;
         opacity: 0.65;
         transition: opacity 0.2s, background 0.2s, border-color 0.2s;
@@ -60,8 +76,8 @@
       #drop-zone:hover,
       #drop-zone.drag-over {
         opacity: 1;
-        background: rgba(0, 170, 255, 0.08);
-        border-color: rgba(0, 170, 255, 1);
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 1);
       }
       .track-list {
         list-style: none;
@@ -81,7 +97,7 @@
         gap: 1rem;
         padding: 0.5rem 0.75rem;
         margin-bottom: 0.4rem;
-        border: 1px solid rgba(0, 170, 255, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.25);
         font-size: 0.8rem;
         opacity: 0.65;
         transition: opacity 0.15s, border-color 0.15s, background 0.15s;
@@ -95,7 +111,7 @@
       }
       .track-item.ready:hover {
         opacity: 0.9;
-        border-color: rgba(0, 170, 255, 0.55);
+        border-color: rgba(255, 255, 255, 0.55);
       }
       .track-item.loading,
       .track-item.analyzing,
@@ -108,8 +124,8 @@
       }
       .track-item.active {
         opacity: 1;
-        border-color: rgba(0, 170, 255, 0.85);
-        background: rgba(0, 170, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.85);
+        background: rgba(255, 255, 255, 0.08);
       }
       .track-name {
         flex: 1;
@@ -133,8 +149,8 @@
       }
       .track-delete {
         background: transparent;
-        color: rgba(0, 170, 255, 0.55);
-        border: 1px solid rgba(0, 170, 255, 0.3);
+        color: rgba(255, 255, 255, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.3);
         width: 1.5rem;
         height: 1.5rem;
         font: inherit;
@@ -146,14 +162,14 @@
         transition: color 0.15s, border-color 0.15s, background 0.15s;
       }
       .track-delete:hover {
-        color: rgba(0, 170, 255, 1);
-        border-color: rgba(0, 170, 255, 0.85);
-        background: rgba(0, 170, 255, 0.08);
+        color: rgba(255, 255, 255, 1);
+        border-color: rgba(255, 255, 255, 0.85);
+        background: rgba(255, 255, 255, 0.08);
       }
       .track-edit {
         background: transparent;
-        color: rgba(0, 170, 255, 0.55);
-        border: 1px solid rgba(0, 170, 255, 0.3);
+        color: rgba(255, 255, 255, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.3);
         width: 1.5rem;
         height: 1.5rem;
         font: inherit;
@@ -165,9 +181,9 @@
         transition: color 0.15s, border-color 0.15s, background 0.15s;
       }
       .track-edit:hover {
-        color: rgba(0, 170, 255, 1);
-        border-color: rgba(0, 170, 255, 0.85);
-        background: rgba(0, 170, 255, 0.08);
+        color: rgba(255, 255, 255, 1);
+        border-color: rgba(255, 255, 255, 0.85);
+        background: rgba(255, 255, 255, 0.08);
       }
       /* Track editor modal — opens on top of the music tab when the
          user clicks ✎ on a track row. Z-index above the menu (20) but
@@ -179,10 +195,10 @@
         align-items: center;
         justify-content: center;
         background: rgba(0, 0, 0, 0.65);
-        color: #00aaff;
-        font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: #ffffff;
+        font-family: "M PLUS 1", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         text-transform: uppercase;
-        letter-spacing: 0;
+        letter-spacing: 0.12em;
         z-index: 50;
       }
       #track-editor.hidden { display: none; }
@@ -190,7 +206,7 @@
         display: flex;
         flex-direction: column;
         background: rgba(0, 0, 0, 0.92);
-        border: 1px dashed rgba(0, 170, 255, 0.55);
+        border: 1px dashed rgba(255, 255, 255, 0.55);
         width: min(90vw, 60rem);
         max-height: 90vh;
       }
@@ -200,7 +216,7 @@
         align-items: baseline;
         gap: 1rem;
         padding: 1rem 1.5rem;
-        border-bottom: 1px dashed rgba(0, 170, 255, 0.35);
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.35);
       }
       .editor-header h2 {
         margin: 0;
@@ -214,8 +230,8 @@
       }
       .editor-close {
         background: transparent;
-        color: #00aaff;
-        border: 1px solid rgba(0, 170, 255, 0.55);
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.55);
         width: 1.75rem;
         height: 1.75rem;
         font: inherit;
@@ -227,8 +243,8 @@
         transition: background 0.15s, border-color 0.15s;
       }
       .editor-close:hover {
-        background: rgba(0, 170, 255, 0.12);
-        border-color: rgba(0, 170, 255, 1);
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 1);
       }
       .editor-meta {
         display: flex;
@@ -248,8 +264,8 @@
       }
       .editor-meta-field input {
         background: transparent;
-        color: #00aaff;
-        border: 1px solid rgba(0, 170, 255, 0.55);
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.55);
         font: inherit;
         font-size: 0.85rem;
         padding: 0.25rem 0.5rem;
@@ -259,7 +275,7 @@
       }
       .editor-meta-field input:focus {
         outline: none;
-        border-color: rgba(0, 170, 255, 1);
+        border-color: rgba(255, 255, 255, 1);
       }
       .editor-meta-field .value {
         opacity: 0.85;
@@ -275,7 +291,7 @@
         width: 100%;
         height: 14rem;
         background: rgba(0, 30, 60, 0.4);
-        border: 1px solid rgba(0, 170, 255, 0.35);
+        border: 1px solid rgba(255, 255, 255, 0.35);
         cursor: crosshair;
       }
       .editor-help {
@@ -288,12 +304,12 @@
         justify-content: flex-end;
         gap: 0.75rem;
         padding: 1rem 1.5rem;
-        border-top: 1px dashed rgba(0, 170, 255, 0.35);
+        border-top: 1px dashed rgba(255, 255, 255, 0.35);
       }
       .editor-footer button {
         background: transparent;
-        color: #00aaff;
-        border: 1px solid rgba(0, 170, 255, 0.55);
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.55);
         font: inherit;
         font-size: 0.85rem;
         padding: 0.5rem 1.25rem;
@@ -302,13 +318,20 @@
         transition: background 0.15s, border-color 0.15s;
       }
       .editor-footer button:hover {
-        background: rgba(0, 170, 255, 0.12);
-        border-color: rgba(0, 170, 255, 1);
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 1);
       }
       .editor-footer .save-btn {
-        background: rgba(0, 170, 255, 0.1);
+        background: rgba(255, 255, 255, 0.1);
       }
       #title-screen.hidden {
+        display: none;
+      }
+      /* When the user menu is open, hide the other page chrome so the
+         menu modal reads as the sole UI surface. #menu-button stays
+         visible (it doubles as the close affordance). */
+      body.menu-open #title-screen,
+      body.menu-open #waveform-overlay {
         display: none;
       }
       /* Sync flash: full-viewport white overlay that pulses on
@@ -341,7 +364,7 @@
         width: 2.5rem;
         height: 2.5rem;
         background: rgba(0, 0, 0, 0.55);
-        border: 1px solid rgba(0, 170, 255, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.55);
         cursor: pointer;
         z-index: 22;
         display: flex;
@@ -353,14 +376,14 @@
         transition: border-color 0.15s, background 0.15s;
       }
       #menu-button:hover {
-        border-color: rgba(0, 170, 255, 1);
+        border-color: rgba(255, 255, 255, 1);
         background: rgba(0, 0, 0, 0.75);
       }
       #menu-button span {
         display: block;
         width: 1.25rem;
         height: 2px;
-        background: #00aaff;
+        background: #ffffff;
       }
       #menu {
         position: fixed;
@@ -369,31 +392,31 @@
         align-items: center;
         justify-content: center;
         background: rgba(0, 0, 0, 0.55);
-        color: #00aaff;
-        font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: #ffffff;
+        font-family: "M PLUS 1", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         text-transform: uppercase;
-        letter-spacing: 0;
+        letter-spacing: 0.12em;
         z-index: 20;
       }
       #menu.hidden { display: none; }
       .user-modal {
         display: flex;
         background: rgba(0, 0, 0, 0.85);
-        border: 1px dashed rgba(0, 170, 255, 0.55);
+        border: 1px dashed rgba(255, 255, 255, 0.55);
         min-width: 32rem;
         min-height: 18rem;
       }
       .user-tabs {
         display: flex;
         flex-direction: column;
-        border-right: 1px dashed rgba(0, 170, 255, 0.35);
+        border-right: 1px dashed rgba(255, 255, 255, 0.35);
         min-width: 9rem;
       }
       .user-tab {
         background: transparent;
-        color: #00aaff;
+        color: #ffffff;
         border: 0;
-        border-bottom: 1px dashed rgba(0, 170, 255, 0.2);
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.2);
         padding: 0.85rem 1.5rem;
         text-align: left;
         font: inherit;
@@ -406,7 +429,7 @@
       .user-tab:hover { opacity: 1; }
       .user-tab.active {
         opacity: 1;
-        background: rgba(0, 170, 255, 0.1);
+        background: rgba(255, 255, 255, 0.1);
       }
       .user-panes {
         flex: 1;
@@ -423,8 +446,8 @@
         margin: 0.5rem 0;
         padding: 0.6rem 1.25rem;
         background: transparent;
-        color: #00aaff;
-        border: 1px solid rgba(0, 170, 255, 0.55);
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.55);
         font: inherit;
         letter-spacing: inherit;
         text-transform: inherit;
@@ -432,14 +455,16 @@
         transition: background 0.15s, border-color 0.15s;
       }
       .user-pane > button:hover {
-        background: rgba(0, 170, 255, 0.12);
-        border-color: rgba(0, 170, 255, 1);
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 1);
       }
     </style>
   </head>
   <body>
     <div id="title-screen">
-      <h1>HELLO RUN</h1>
+      <div class="title-logo-wrap">
+        <img id="title-logo" src="/images/hellorun2.svg" alt="HelloRun 2" />
+      </div>
       <p class="subtitle">loading audio…</p>
     </div>
     <input type="file" id="file-picker" accept="audio/*" hidden />
